@@ -1,0 +1,11 @@
+FROM alpine:3.24.1
+
+RUN apk add --no-cache openssh-client-default \
+    && addgroup -S -g 10002 tunnel \
+    && adduser -S -D -H -u 10002 -G tunnel tunnel
+
+COPY --chown=tunnel:tunnel docker/ssh-tunnel-entrypoint.sh /usr/local/bin/ssh-tunnel-entrypoint
+RUN chmod 0555 /usr/local/bin/ssh-tunnel-entrypoint
+
+USER 10002:10002
+ENTRYPOINT ["/usr/local/bin/ssh-tunnel-entrypoint"]

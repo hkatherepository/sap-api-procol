@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+.env
+secrets/id_ed25519
+secrets/id_ed25519.pub
+secrets/known_hosts
+.git
+*.log

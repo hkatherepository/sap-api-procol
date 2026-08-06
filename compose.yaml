@@ -1,0 +1,65 @@
+services:
+  sap-integration:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    depends_on:
+      db-tunnel:
+        condition: service_healthy
+    secrets:
+      - source: sap-ca
+        target: sap-ca.crt
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - sap_backend
+
+  db-tunnel:
+    build:
+      context: .
+      dockerfile: Dockerfile.ssh-tunnel
+    restart: unless-stopped
+    user: "10002:10002"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=1m,noexec,nosuid,nodev
+    environment:
+      SSH_HOST: ${SSH_HOST:-38.47.88.75}
+      SSH_PORT: ${SSH_PORT:-22}
+      SSH_USER: ${SSH_USER:-fariz}
+      SSH_REMOTE_DB_HOST: ${SSH_REMOTE_DB_HOST:-127.0.0.1}
+      SSH_REMOTE_DB_PORT: ${SSH_REMOTE_DB_PORT:-5432}
+      SSH_TUNNEL_PORT: ${SSH_TUNNEL_PORT:-15432}
+    secrets:
+      - source: ssh-private-key
+        target: id_ed25519
+      - source: ssh-known-hosts
+        target: known_hosts
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 $${SSH_TUNNEL_PORT}"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - sap_backend
+
+secrets:
+  sap-ca:
+    file: ./secrets/sap-ca.crt
+  ssh-private-key:
+    file: ./secrets/id_ed25519
+  ssh-known-hosts:
+    file: ./secrets/known_hosts
+
+networks:
+  sap_backend:
+    driver: bridge
