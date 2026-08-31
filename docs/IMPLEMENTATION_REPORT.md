@@ -16,7 +16,7 @@ Komponen yang selesai:
 - validator/normalizer Vendor, PR, dan PO;
 - exact duplicate handling dan natural-key conflict quarantine;
 - grouping PR/PO per header dengan item terurut dan checksum stabil;
-- kalkulasi decimal, `LOEKZ`, status awal, multi-currency, dan vendor lookup;
+- kalkulasi decimal, `LOEKZ`, full release `FRGKZ`/`FRGKE`, status lifecycle, multi-currency, dan vendor lookup;
 - repository PostgreSQL, transaksi per dokumen, advisory lock, checkpoint, audit, dan retensi;
 - linkage item PR–PO serta pengisian `purchase_orders.pr_id` hanya untuk satu header PR;
 - CLI operator, scheduler dua slot WIB, catch-up, health check, graceful shutdown;

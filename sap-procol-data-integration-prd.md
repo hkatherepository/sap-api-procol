@@ -310,6 +310,7 @@ Satu header dibuat per `BANFN`; natural key item adalah `BANFN + BNFPO`.
 | `PREIS` | `items[].price` |
 | `PEINH` | `items[].price_unit` |
 | `PSTYP` | `items[].item_category` |
+| `FRGKZ` | `items[].release_indicator` dan status full release PR |
 | `WAERS` | header currency dan `items[].currency` |
 | `EBELN` | `items[].po_number` |
 | `EBELP` | `items[].po_item_number` |
@@ -319,12 +320,14 @@ Aturan PR:
 - Total item aktif adalah `quantity × price ÷ price_unit`.
 - `price_unit <= 0` menjadi invalid.
 - Item dengan `LOEKZ` tidak kosong tetap disimpan tetapi dikeluarkan dari total.
-- PR baru menjadi `CONVERTED` jika seluruh item aktif memiliki PO; selain itu
-  `SUBMITTED`.
+- PR menjadi `CONVERTED` jika seluruh item aktif memiliki PO. Jika belum
+  converted, PR menjadi `APPROVED` bila seluruh item aktif memiliki `FRGKZ=2`;
+  selain itu `SUBMITTED`.
 - Semua item terhapus menghasilkan `SUBMITTED` dan issue `ALL_ITEMS_DELETED`.
 - Project, WBS, ARP, needed date, dan user UUID tetap `null` sampai ada mapping.
 - PR lokal dengan nomor sama menjadi `LOCAL_RECORD_CONFLICT` dan tidak diubah.
-- Status bisnis record SAP yang sudah lebih maju tidak diregresikan.
+- Status record SAP dapat berubah mengikuti hasil mapping selama status existing
+  masih `SUBMITTED`, `APPROVED`, atau `CONVERTED`. Status `REJECTED` dilindungi.
 - Multi-currency membuat total header `null` dan issue rekonsiliasi.
 
 ### 7.3 Purchase Order
@@ -347,13 +350,19 @@ Satu header dibuat per `EBELN`; natural key item adalah `EBELN + EBELP`.
 | `MENGE` | `items[].quantity` |
 | `MEINS` | `items[].unit` |
 | `NETPR` | `items[].net_price` |
+| `FRGKE` | `items[].release_indicator` dan status full release PO |
 | `WAERS` | header currency dan `items[].currency` |
 
 Aturan PO:
 
 - Total PO dihitung dari item aktif sebagai `quantity × net_price`.
 - `ppn` dan `grand_total` tidak direkayasa karena tidak tersedia pada API.
-- PO baru menjadi `ISSUED`; lifecycle lokal selanjutnya tidak diregresikan.
+- PO menjadi `ISSUED` bila seluruh item aktif memiliki `FRGKE=G`; selain itu
+  `DRAFT`. Dokumen tanpa item aktif menjadi `DRAFT`.
+- Status record SAP dapat berubah antara `DRAFT` dan `ISSUED`. Lifecycle lokal
+  `ACKNOWLEDGED`, `PARTIAL`, `DELIVERED`, `CLOSED`, dan `CANCELLED` dilindungi.
+- `issued_at` memakai `AEDAT` ketika status SAP `ISSUED` dan dikosongkan ketika
+  status kembali `DRAFT`; status lifecycle lokal mempertahankan nilainya.
 - Vendor dicari melalui `LIFNR`. Vendor yang belum ditemukan menghasilkan
   `vendor_id = null` dan issue `VENDOR_NOT_FOUND`, lalu direkonsiliasi ulang.
 - Vendor, company, atau currency yang berbeda dalam satu PO mengarantina dokumen.

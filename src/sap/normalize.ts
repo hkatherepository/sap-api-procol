@@ -115,6 +115,7 @@ function normalizePrItem(raw: Raw, index: number): NormalizedRecord<{ prNumber: 
     price: price.toFixed(),
     priceUnit: priceUnit.toFixed(),
     itemCategory: cleanString(raw.PSTYP),
+    releaseIndicator: cleanString(raw.FRGKZ),
     currency: cleanString(raw.WAERS),
     poNumber,
     poItemNumber: poItem,
@@ -165,7 +166,11 @@ function groupPr(items: NormalizedRecord<{ prNumber: string; sourceDate: string;
       sourceCreatedBy: first.sourceCreatedBy,
       currency: currencies.size === 1 ? [...currencies][0]! : null,
       total: currencies.size <= 1 ? active.reduce((sum, item) => sum.add(item.lineTotal ?? 0), new Decimal(0)).toFixed() : null,
-      status: active.length > 0 && active.every((item) => item.poNumber) ? "CONVERTED" : "SUBMITTED",
+      status: active.length > 0 && active.every((item) => item.poNumber)
+        ? "CONVERTED"
+        : active.length > 0 && active.every((item) => item.releaseIndicator === "2")
+          ? "APPROVED"
+          : "SUBMITTED",
       items: sorted,
       issues,
     };
@@ -207,6 +212,7 @@ function normalizePoItem(raw: Raw, index: number): NormalizedRecord<{ poNumber: 
     quantity: quantity.toFixed(),
     unit: cleanString(raw.MEINS),
     netPrice: netPrice.toFixed(),
+    releaseIndicator: cleanString(raw.FRGKE),
     currency: cleanString(raw.WAERS),
     lineTotal: deleteIndicator ? null : quantity.mul(netPrice).toFixed(),
   };
@@ -247,6 +253,7 @@ export function normalizePoDocuments(rows: unknown[]): NormalizedRecord<PoDocume
     if (companies.size > 1) issues.push({ code: "INCONSISTENT_COMPANY", message: `PO ${poNumber} memiliki company berbeda` });
     if (vendorCodes.size > 1) issues.push({ code: "INCONSISTENT_VENDOR", message: `PO ${poNumber} memiliki vendor berbeda` });
     const first = group[0]!.value!;
+    const active = sorted.filter((item) => !item.isDeleted);
     const document: PoDocument = {
       poNumber,
       sourceDate: first.sourceDate,
@@ -254,8 +261,8 @@ export function normalizePoDocuments(rows: unknown[]): NormalizedRecord<PoDocume
       vendorCode: first.vendorCode,
       vendorNameSnapshot: first.vendorName,
       currency: currencies.size === 1 ? [...currencies][0]! : null,
-      total: currencies.size <= 1 ? sorted.filter((item) => !item.isDeleted).reduce((sum, item) => sum.add(item.lineTotal ?? 0), new Decimal(0)).toFixed() : null,
-      status: "ISSUED",
+      total: currencies.size <= 1 ? active.reduce((sum, item) => sum.add(item.lineTotal ?? 0), new Decimal(0)).toFixed() : null,
+      status: active.length > 0 && active.every((item) => item.releaseIndicator === "G") ? "ISSUED" : "DRAFT",
       items: sorted,
       issues,
     };

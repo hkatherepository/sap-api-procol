@@ -159,6 +159,69 @@ describeDatabase("Repository PostgreSQL", () => {
     }
   });
 
+  it("mengikuti status release SAP tanpa menimpa lifecycle lokal", async () => {
+    const client = await pool.connect();
+    const prNumber = `PR-STATUS-${randomUUID()}`;
+    const poNumber = `PO-STATUS-${randomUUID()}`;
+    const pr: PrDocument = {
+      prNumber,
+      sourceDate: "2026-08-05",
+      sourceCreatedBy: "SAPUSER",
+      currency: "IDR",
+      total: "10",
+      status: "SUBMITTED",
+      items: [],
+      issues: [],
+    };
+    const po: PoDocument = {
+      poNumber,
+      sourceDate: "2026-08-05",
+      sourceCreatedBy: "SAPUSER",
+      vendorCode: `MISSING-${randomUUID()}`,
+      vendorNameSnapshot: "Vendor SAP",
+      currency: "IDR",
+      total: "10",
+      status: "DRAFT",
+      items: [],
+      issues: [],
+    };
+    try {
+      await client.query("BEGIN");
+      await repository.reconcilePr(client, pr, "1".repeat(64), true);
+      await repository.reconcilePr(client, { ...pr, status: "APPROVED" }, "2".repeat(64), true);
+      expect((await client.query("SELECT status FROM purchase_requests WHERE pr_number=$1", [prNumber])).rows[0]?.status).toBe("approved");
+      await repository.reconcilePr(client, { ...pr, status: "CONVERTED" }, "3".repeat(64), true);
+      await repository.reconcilePr(client, pr, "4".repeat(64), true);
+      expect((await client.query("SELECT status FROM purchase_requests WHERE pr_number=$1", [prNumber])).rows[0]?.status).toBe("submitted");
+      await client.query("UPDATE purchase_requests SET status='rejected' WHERE pr_number=$1", [prNumber]);
+      await repository.reconcilePr(client, { ...pr, status: "APPROVED" }, "5".repeat(64), true);
+      expect((await client.query("SELECT status FROM purchase_requests WHERE pr_number=$1", [prNumber])).rows[0]?.status).toBe("rejected");
+
+      await repository.reconcilePo(client, po, "6".repeat(64), true);
+      let storedPo = (await client.query<{ status: string; issued_at: Date | null }>("SELECT status,issued_at FROM purchase_orders WHERE po_number=$1", [poNumber])).rows[0]!;
+      expect(storedPo).toMatchObject({ status: "draft", issued_at: null });
+      await repository.reconcilePo(client, { ...po, status: "ISSUED" }, "7".repeat(64), true);
+      storedPo = (await client.query("SELECT status,issued_at FROM purchase_orders WHERE po_number=$1", [poNumber])).rows[0]!;
+      expect(storedPo.status).toBe("issued");
+      expect(storedPo.issued_at).not.toBeNull();
+      await repository.reconcilePo(client, po, "8".repeat(64), true);
+      storedPo = (await client.query("SELECT status,issued_at FROM purchase_orders WHERE po_number=$1", [poNumber])).rows[0]!;
+      expect(storedPo).toMatchObject({ status: "draft", issued_at: null });
+
+      for (const protectedStatus of ["acknowledged", "partial", "delivered", "closed", "cancelled"] as const) {
+        await client.query("UPDATE purchase_orders SET status=$2,issued_at='2026-08-05' WHERE po_number=$1", [poNumber, protectedStatus]);
+        await repository.reconcilePo(client, po, protectedStatus.padEnd(64, "0"), true);
+        storedPo = (await client.query("SELECT status,issued_at FROM purchase_orders WHERE po_number=$1", [poNumber])).rows[0]!;
+        expect(storedPo.status).toBe(protectedStatus);
+        expect(storedPo.issued_at).not.toBeNull();
+      }
+      await client.query("ROLLBACK");
+    } finally {
+      await client.query("ROLLBACK").catch(() => {});
+      client.release();
+    }
+  });
+
   it("menjalankan alur Vendor ke PR ke PO secara idempotent dan membuat linkage", async () => {
     const nonce = String(Math.floor(1_000_000_000 + Math.random() * 8_999_999_999));
     const vendorCode = `2${nonce.slice(1)}`;
@@ -193,11 +256,11 @@ describeDatabase("Repository PostgreSQL", () => {
       vendor: [{ LIFNR: vendorCode, NAME1: "E2E VENDOR", AEDAT: "2026-08-05" }],
       pr: [{
         KEY: `${prNumber}00010`, BANFN: prNumber, BNFPO: 10, LOEKZ: "", ERDAT: "2026-08-05",
-        MENGE: "2", PREIS: "100.000", PEINH: "1", WAERS: "IDR", EBELN: poNumber, EBELP: 10,
+        MENGE: "2", PREIS: "100.000", PEINH: "1", WAERS: "IDR", FRGKZ: "2", EBELN: poNumber, EBELP: 10,
       }],
       po: [{
         KEY: `${poNumber}00010`, EBELN: poNumber, EBELP: 10, LOEKZ: "", AEDAT: "2026-08-05",
-        LIFNR: vendorCode, NAME_VEND: "E2E VENDOR", BUKRS: "HK03", MENGE: "2", NETPR: "100.000", WAERS: "IDR",
+        LIFNR: vendorCode, NAME_VEND: "E2E VENDOR", BUKRS: "HK03", MENGE: "2", NETPR: "100.000", WAERS: "IDR", FRGKE: "G",
       }],
     };
     const sap = { fetch: async (resource: keyof typeof payloads) => payloads[resource] } as unknown as SapClient;

@@ -72,6 +72,7 @@ export interface PrItem {
   price: string;
   priceUnit: string;
   itemCategory: string | null;
+  releaseIndicator: string | null;
   currency: string | null;
   poNumber: string | null;
   poItemNumber: string | null;
@@ -84,7 +85,7 @@ export interface PrDocument {
   sourceCreatedBy: string | null;
   currency: string | null;
   total: string | null;
-  status: "SUBMITTED" | "CONVERTED";
+  status: "SUBMITTED" | "APPROVED" | "CONVERTED";
   items: PrItem[];
   issues: Issue[];
 }
@@ -100,6 +101,7 @@ export interface PoItem {
   quantity: string;
   unit: string | null;
   netPrice: string;
+  releaseIndicator: string | null;
   currency: string | null;
   lineTotal: string | null;
 }
@@ -112,7 +114,7 @@ export interface PoDocument {
   vendorNameSnapshot: string | null;
   currency: string | null;
   total: string | null;
-  status: "ISSUED";
+  status: "DRAFT" | "ISSUED";
   items: PoItem[];
   issues: Issue[];
 }

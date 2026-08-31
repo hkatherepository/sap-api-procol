@@ -39,6 +39,7 @@ const poSample = {
   MEINS: "AU",
   NETPR: "187.200.000",
   WAERS: "IDR",
+  FRGKE: "G",
 };
 
 describe("normalisasi Vendor", () => {
@@ -63,12 +64,43 @@ describe("normalisasi PR", () => {
     const [record] = normalizePrDocuments([prSample]);
     expect(record?.issues).toEqual([]);
     expect(record?.value).toMatchObject({ prNumber: "1310010057", status: "SUBMITTED", currency: "IDR", total: "1" });
-    expect(record?.value?.items[0]).toMatchObject({ itemNumber: "00010", lineTotal: "1", isDeleted: false });
+    expect(record?.value?.items[0]).toMatchObject({ itemNumber: "00010", lineTotal: "1", isDeleted: false, releaseIndicator: null });
+  });
+
+  it("menjadi APPROVED bila seluruh item aktif memiliki FRGKZ 2", () => {
+    const [record] = normalizePrDocuments([{ ...prSample, FRGKZ: " 2 " }]);
+    expect(record?.value?.status).toBe("APPROVED");
+    expect(record?.value?.items[0]?.releaseIndicator).toBe("2");
   });
 
   it("menjadi CONVERTED bila seluruh item aktif punya PO", () => {
-    const [record] = normalizePrDocuments([{ ...prSample, EBELN: "4350006127", EBELP: 10 }]);
+    const [record] = normalizePrDocuments([{ ...prSample, FRGKZ: "2", EBELN: "4350006127", EBELP: 10 }]);
     expect(record?.value?.status).toBe("CONVERTED");
+  });
+
+  it("tetap SUBMITTED bila release item aktif kosong, bukan 2, atau campuran", () => {
+    expect(normalizePrDocuments([prSample])[0]?.value?.status).toBe("SUBMITTED");
+    expect(normalizePrDocuments([{ ...prSample, FRGKZ: "X" }])[0]?.value?.status).toBe("SUBMITTED");
+    const [mixed] = normalizePrDocuments([
+      { ...prSample, FRGKZ: "2" },
+      { ...prSample, KEY: "131001005700020", BNFPO: 20, FRGKZ: "X" },
+    ]);
+    expect(mixed?.value?.status).toBe("SUBMITTED");
+  });
+
+  it("mengabaikan item terhapus saat menentukan full release", () => {
+    const [record] = normalizePrDocuments([
+      { ...prSample, FRGKZ: "2" },
+      { ...prSample, KEY: "131001005700020", BNFPO: 20, FRGKZ: "X", LOEKZ: "X" },
+    ]);
+    expect(record?.value?.status).toBe("APPROVED");
+  });
+
+  it("memasukkan release indicator ke checksum", () => {
+    const [withoutRelease] = normalizePrDocuments([prSample]);
+    const [withRelease] = normalizePrDocuments([{ ...prSample, FRGKZ: "X" }]);
+    expect(withoutRelease?.value?.status).toBe(withRelease?.value?.status);
+    expect(withoutRelease?.hash).not.toBe(withRelease?.hash);
   });
 
   it("menyimpan LOEKZ tetapi mengecualikannya dari total", () => {
@@ -89,6 +121,29 @@ describe("normalisasi PO", () => {
     const [record] = normalizePoDocuments([poSample]);
     expect(record?.issues).toEqual([]);
     expect(record?.value).toMatchObject({ poNumber: "4350006127", vendorCode: "2020015489", total: "187200000", status: "ISSUED" });
+    expect(record?.value?.items[0]?.releaseIndicator).toBe("G");
+  });
+
+  it("menjadi DRAFT bila release item aktif kosong atau campuran", () => {
+    const [withoutRelease] = normalizePoDocuments([{ ...poSample, FRGKE: undefined }]);
+    expect(withoutRelease?.value?.status).toBe("DRAFT");
+    expect(withoutRelease?.value?.items[0]?.releaseIndicator).toBeNull();
+    expect(withoutRelease?.hash).not.toBe(normalizePoDocuments([poSample])[0]?.hash);
+    expect(normalizePoDocuments([{ ...poSample, FRGKE: "g" }])[0]?.value?.status).toBe("DRAFT");
+    const [mixed] = normalizePoDocuments([
+      poSample,
+      { ...poSample, KEY: "435000612700020", EBELP: 20, FRGKE: "X" },
+    ]);
+    expect(mixed?.value?.status).toBe("DRAFT");
+  });
+
+  it("mengabaikan item PO terhapus saat menentukan full release", () => {
+    const [record] = normalizePoDocuments([
+      poSample,
+      { ...poSample, KEY: "435000612700020", EBELP: 20, FRGKE: "X", LOEKZ: "X" },
+    ]);
+    expect(record?.value?.status).toBe("ISSUED");
+    expect(normalizePoDocuments([{ ...poSample, LOEKZ: "X" }])[0]?.value?.status).toBe("DRAFT");
   });
 
   it("mengarantina company yang berbeda pada satu PO", () => {

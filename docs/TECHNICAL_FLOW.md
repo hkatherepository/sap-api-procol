@@ -112,7 +112,7 @@ lookup pr_number
   └─ checksum berubah        → update field SAP + items
 ```
 
-Total aktif = `quantity × price ÷ priceUnit`. Item `LOEKZ` tetap ada di JSON tetapi tidak masuk total. Status hanya boleh maju dari `SUBMITTED` ke `CONVERTED`; lifecycle lokal lain dipertahankan.
+Total aktif = `quantity × price ÷ priceUnit`. Item `LOEKZ` tetap ada di JSON tetapi tidak masuk total maupun evaluasi release. `FRGKZ` disimpan sebagai `releaseIndicator`. Status menjadi `CONVERTED` bila seluruh item aktif memiliki PO; jika belum, menjadi `APPROVED` bila seluruh item aktif memiliki `FRGKZ=2`, atau `SUBMITTED` selain itu. Sinkronisasi dapat mengubah status di antara ketiga status SAP tersebut, sedangkan `REJECTED` dipertahankan.
 
 ### Purchase Order
 
@@ -127,7 +127,7 @@ lookup po_number + LIFNR pada vendor_registrations.vendor_code
                          reconcile PR item links
 ```
 
-Total aktif = `quantity × netPrice`; `ppn` dan `grand_total` tidak direkayasa. Setelah PO ditulis, item PR dengan `poNumber + poItemNumber` yang sama dimasukkan ke `sap_document_links`. `purchase_orders.pr_id` hanya diisi jika semua link PO menunjuk tepat satu header PR.
+Total aktif = `quantity × netPrice`; `ppn` dan `grand_total` tidak direkayasa. `FRGKE` disimpan sebagai `releaseIndicator`: seluruh item aktif harus bernilai `G` agar PO menjadi `ISSUED`, jika tidak statusnya `DRAFT`. SAP dapat mengubah status di antara `DRAFT` dan `ISSUED`, tetapi lifecycle lokal mulai `ACKNOWLEDGED` hingga `CANCELLED` dipertahankan. `issued_at` mengikuti `AEDAT` untuk `ISSUED` dan dikosongkan saat kembali `DRAFT`. Setelah PO ditulis, item PR dengan `poNumber + poItemNumber` yang sama dimasukkan ke `sap_document_links`. `purchase_orders.pr_id` hanya diisi jika semua link PO menunjuk tepat satu header PR.
 
 ## 6. Batas transaksi, audit, dan checkpoint
 

@@ -168,7 +168,7 @@ export class Repository {
     if (apply) {
       await client.query(
         `UPDATE purchase_requests SET source_checksum=$2,source_date=$3,source_created_by=$4,currency=$5,total_amount=$6,items=$7::jsonb,
-         status=CASE WHEN status='submitted' AND $8='CONVERTED' THEN 'converted'::pr_status ELSE status END,
+         status=CASE WHEN status IN ('submitted','approved','converted') THEN lower($8)::pr_status ELSE status END,
          last_synced_at=now(),updated_at=now() WHERE id=$1`,
         [existing.id, hash, document.sourceDate, document.sourceCreatedBy, document.currency, document.total, JSON.stringify(document.items), document.status],
       );
@@ -197,17 +197,21 @@ export class Repository {
         const inserted = await client.query<{ id: string }>(
           `INSERT INTO purchase_orders(id,po_number,status,data_source,source_key,source_checksum,source_date,source_created_by,issued_at,
            vendor_id,vendor_name_snapshot,currency,total_amount,items,last_synced_at,updated_at)
-           VALUES(gen_random_uuid(),$1,'issued','SAP',$1,$2,$3::date,$4,$3::date::timestamptz,$5,$6,$7,$8,$9::jsonb,
+           VALUES(gen_random_uuid(),$1,lower($2)::po_status,'SAP',$1,$3,$4::date,$5,
+           CASE WHEN $2='ISSUED' THEN $4::date::timestamptz ELSE NULL END,$6,$7,$8,$9,$10::jsonb,
            now(),now()) RETURNING id`,
-          [document.poNumber, hash, document.sourceDate, document.sourceCreatedBy, vendorId, document.vendorNameSnapshot, document.currency, document.total, JSON.stringify(document.items)],
+          [document.poNumber, document.status, hash, document.sourceDate, document.sourceCreatedBy, vendorId, document.vendorNameSnapshot, document.currency, document.total, JSON.stringify(document.items)],
         );
         poId = inserted.rows[0]!.id;
       }
     } else if (apply) {
       await client.query(
         `UPDATE purchase_orders SET source_checksum=$2,source_date=$3,source_created_by=$4,vendor_id=$5,vendor_name_snapshot=$6,
-         currency=$7,total_amount=$8,items=$9::jsonb,last_synced_at=now(),updated_at=now() WHERE id=$1`,
-        [existing.id, hash, document.sourceDate, document.sourceCreatedBy, vendorId, document.vendorNameSnapshot, document.currency, document.total, JSON.stringify(document.items)],
+         currency=$7,total_amount=$8,items=$9::jsonb,
+         issued_at=CASE WHEN status IN ('draft','issued') THEN CASE WHEN $10='ISSUED' THEN $3::date::timestamptz ELSE NULL END ELSE issued_at END,
+         status=CASE WHEN status IN ('draft','issued') THEN lower($10)::po_status ELSE status END,
+         last_synced_at=now(),updated_at=now() WHERE id=$1`,
+        [existing.id, hash, document.sourceDate, document.sourceCreatedBy, vendorId, document.vendorNameSnapshot, document.currency, document.total, JSON.stringify(document.items), document.status],
       );
     }
     if (apply && poId) await this.reconcileLinks(client, poId, document.poNumber);
