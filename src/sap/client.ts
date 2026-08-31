@@ -50,12 +50,15 @@ export class SapClient {
   private requestOnce(resource: Resource, window: DateWindow): Promise<unknown[]> {
     const url = new URL(this.config.urls[resource]);
     let body: string | undefined;
-    if (this.config.filterTransport === "query_parameter") {
-      url.searchParams.set(this.config.lowParam, window.low);
-      url.searchParams.set(this.config.highParam, window.high);
-    } else {
-      body = JSON.stringify({ [this.config.lowParam]: window.low, [this.config.highParam]: window.high });
-    }
+    // ponytail: filter tanggal dinonaktifkan sementara - ambil seluruh data terkini dari SAP.
+    // Aktifkan lagi kalau payload SAP sudah terlalu besar untuk sekali tarik.
+    // if (this.config.filterTransport === "query_parameter") {
+    //   url.searchParams.set(this.config.lowParam, window.low);
+    //   url.searchParams.set(this.config.highParam, window.high);
+    // } else {
+    //   body = JSON.stringify({ [this.config.lowParam]: window.low, [this.config.highParam]: window.high });
+    // }
+    void window;
 
     return new Promise((resolve, reject) => {
       const req = request(

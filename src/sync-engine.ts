@@ -162,8 +162,9 @@ export class SyncEngine {
     const today = jakartaToday();
     for (const resource of selected) {
       const checkpointBefore = await this.repository.checkpoint(resource);
-      const low = checkpointBefore ?? today;
-      for (const window of splitMonthlyWindows(low, today)) tasks.push({ resource, window, checkpointBefore });
+      // ponytail: filter tanggal off di client, jadi cukup 1 task per resource (full pull).
+      // Balikkan ke splitMonthlyWindows(checkpointBefore ?? today, today) kalau filter diaktifkan lagi.
+      tasks.push({ resource, window: { low: today, high: today }, checkpointBefore });
     }
     return this.sortTasks(tasks);
   }

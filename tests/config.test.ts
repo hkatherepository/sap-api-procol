@@ -32,14 +32,14 @@ describe("loadConfig", () => {
   });
 
   it("menerima dua cron terpisah", () => {
-    expect(loadConfig({ ...base, SYNC_SCHEDULES: "0 8 * * *,0 16 * * *" }).sync.schedules).toEqual(["0 8 * * *", "0 16 * * *"]);
+    expect(loadConfig({ ...base, SYNC_SCHEDULES: "0 7 * * *,0 12 * * *,0 19 * * *" }).sync.schedules).toEqual(["0 7 * * *", "0 12 * * *", "0 19 * * *"]);
   });
 
   it("menerima cron gabungan", () => {
-    expect(loadConfig({ ...base, SYNC_SCHEDULES: "0 8,16 * * *" }).sync.schedules).toEqual(["0 8,16 * * *"]);
+    expect(loadConfig({ ...base, SYNC_SCHEDULES: "0 7,12,19 * * *" }).sync.schedules).toEqual(["0 7,12,19 * * *"]);
   });
 
-  it("menolak jadwal di luar 08.00 dan 16.00", () => {
+  it("menolak jadwal di luar 07.00, 12.00, dan 19.00", () => {
     expect(() => loadConfig({ ...base, SYNC_SCHEDULES: "0 * * * *" })).toThrow(/hanya boleh/);
   });
 

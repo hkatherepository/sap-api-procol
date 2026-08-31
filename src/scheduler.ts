@@ -23,17 +23,20 @@ function previousDate(compact: string): string {
   return date.toISOString().slice(0, 10).replaceAll("-", "");
 }
 
+export const SLOT_HOURS = ["07", "12", "19"] as const;
+
 export function latestScheduleSlot(now = new Date()): string {
   const local = jakartaParts(now);
-  if (local.hour >= 16) return `${local.date}-16`;
-  if (local.hour >= 8) return `${local.date}-08`;
-  return `${previousDate(local.date)}-16`;
+  const passed = SLOT_HOURS.filter((hour) => local.hour >= Number(hour));
+  const last = passed.at(-1);
+  return last ? `${local.date}-${last}` : `${previousDate(local.date)}-${SLOT_HOURS.at(-1)}`;
 }
 
 export function previousScheduleSlot(slot: string): string {
-  const match = /^(\d{8})-(08|16)$/.exec(slot);
-  if (!match) throw new Error("Schedule slot tidak valid");
-  return match[2] === "16" ? `${match[1]}-08` : `${previousDate(match[1]!)}-16`;
+  const match = /^(\d{8})-(\d{2})$/.exec(slot);
+  const index = match ? (SLOT_HOURS as readonly string[]).indexOf(match[2]!) : -1;
+  if (index < 0) throw new Error("Schedule slot tidak valid");
+  return index === 0 ? `${previousDate(match![1]!)}-${SLOT_HOURS.at(-1)}` : `${match![1]}-${SLOT_HOURS[index - 1]}`;
 }
 
 async function alertMissingPreviousSlot(repository: Repository, logger: Logger, currentSlot: string): Promise<void> {

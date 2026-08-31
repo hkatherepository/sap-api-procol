@@ -21,7 +21,7 @@ const schema = z
     SAP_API_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
     SAP_MAX_RESPONSE_MB: z.coerce.number().positive().max(500).default(50),
     SAP_NUMBER_FORMAT: z.literal("id-ID").default("id-ID"),
-    SYNC_SCHEDULES: z.string().default("0 8 * * *,0 16 * * *"),
+    SYNC_SCHEDULES: z.string().default("0 7 * * *,0 12 * * *,0 19 * * *"),
     SYNC_TIMEZONE: z.literal("Asia/Jakarta").default("Asia/Jakarta"),
     SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(2_000).default(200),
     DRY_RUN_ONLY: booleanString.default(true),
@@ -46,13 +46,14 @@ export type AppConfig = ReturnType<typeof loadConfig>;
 export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
   const env = schema.parse(source);
   const rawSchedules = env.SYNC_SCHEDULES.trim().replace(/\s+/g, " ");
-  const schedules = rawSchedules === "0 8,16 * * *"
+  const schedules = rawSchedules === "0 7,12,19 * * *"
     ? [rawSchedules]
     : rawSchedules.split(",").map((value) => value.trim()).filter(Boolean);
+  const expected = ["0 7 * * *", "0 12 * * *", "0 19 * * *"];
   const validSchedules =
-    (schedules.length === 1 && schedules[0] === "0 8,16 * * *") ||
-    (schedules.length === 2 && schedules.includes("0 8 * * *") && schedules.includes("0 16 * * *"));
-  if (!validSchedules) throw new Error("SYNC_SCHEDULES hanya boleh 0 8 * * *,0 16 * * * atau 0 8,16 * * *");
+    (schedules.length === 1 && schedules[0] === "0 7,12,19 * * *") ||
+    (schedules.length === 3 && expected.every((value) => schedules.includes(value)));
+  if (!validSchedules) throw new Error("SYNC_SCHEDULES hanya boleh 0 7 * * *,0 12 * * *,0 19 * * * atau 0 7,12,19 * * *");
   return {
     env: env.NODE_ENV,
     databaseUrl: env.DATABASE_URL,

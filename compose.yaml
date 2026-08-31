@@ -9,9 +9,12 @@ services:
     security_opt: ["no-new-privileges:true"]
     tmpfs:
       - /tmp:size=32m,noexec,nosuid
+    # Tunnel hanya jalan kalau profile "tunnel" aktif (COMPOSE_PROFILES di .env).
+    # required: false -> di server (DB lokal, tanpa tunnel) app tetap start.
     depends_on:
       db-tunnel:
         condition: service_healthy
+        required: false
     secrets:
       - source: sap-ca
         target: sap-ca.crt
@@ -21,6 +24,7 @@ services:
       - sap_backend
 
   db-tunnel:
+    profiles: ["tunnel"]
     build:
       context: .
       dockerfile: Dockerfile.ssh-tunnel
