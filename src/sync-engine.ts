@@ -2,10 +2,10 @@ import type { Logger } from "pino";
 import type { PoolClient } from "pg";
 import type { AppConfig } from "./config.js";
 import { inTransaction } from "./database.js";
-import { RESOURCES, emptyCounters, type DateWindow, type NormalizedRecord, type PoDocument, type PrDocument, type Resource, type ResourceCounters, type SyncMode, type Trigger, type VendorRecord } from "./domain.js";
+import { RESOURCES, emptyCounters, type DateWindow, type NormalizedRecord, type PoDocument, type PrDocument, type ReceiptDocument, type Resource, type ResourceCounters, type SyncMode, type Trigger, type VendorRecord } from "./domain.js";
 import { Repository, type ReconcileResult } from "./repository.js";
 import { SapClient } from "./sap/client.js";
-import { normalizePoDocuments, normalizePrDocuments, normalizeVendors } from "./sap/normalize.js";
+import { normalizePoDocuments, normalizePrDocuments, normalizeReceiptDocuments, normalizeVendors } from "./sap/normalize.js";
 import { hashJson, jakartaToday, splitMonthlyWindows } from "./utils.js";
 import type { Pool } from "pg";
 
@@ -23,6 +23,7 @@ const FATAL_ISSUES = new Set([
   "INCONSISTENT_CURRENCY",
   "INCONSISTENT_COMPANY",
   "INCONSISTENT_VENDOR",
+  "UNKNOWN_RECEIPT_TCODE",
 ]);
 
 export interface RunRequest {
@@ -162,9 +163,13 @@ export class SyncEngine {
     const today = jakartaToday();
     for (const resource of selected) {
       const checkpointBefore = await this.repository.checkpoint(resource);
-      // ponytail: filter tanggal off di client, jadi cukup 1 task per resource (full pull).
-      // Balikkan ke splitMonthlyWindows(checkpointBefore ?? today, today) kalau filter diaktifkan lagi.
-      tasks.push({ resource, window: { low: today, high: today }, checkpointBefore });
+      // ponytail: filter tanggal off di client untuk vendor/pr/po, jadi cukup 1 task (full pull).
+      // GR difilter BUDAT, jadi harus mulai dari checkpoint supaya run yang terlewat ikut tersusul.
+      if (resource === "gr") {
+        for (const window of splitMonthlyWindows(checkpointBefore ?? today, today)) tasks.push({ resource, window, checkpointBefore });
+      } else {
+        tasks.push({ resource, window: { low: today, high: today }, checkpointBefore });
+      }
     }
     return this.sortTasks(tasks);
   }
@@ -173,16 +178,17 @@ export class SyncEngine {
     return tasks.sort((a, b) => a.window.low.localeCompare(b.window.low) || a.window.high.localeCompare(b.window.high) || RESOURCES.indexOf(a.resource) - RESOURCES.indexOf(b.resource));
   }
 
-  private normalize(resource: Resource, raw: unknown[]): NormalizedRecord<VendorRecord | PrDocument | PoDocument>[] {
+  private normalize(resource: Resource, raw: unknown[]): NormalizedRecord<VendorRecord | PrDocument | PoDocument | ReceiptDocument>[] {
     if (resource === "vendor") return normalizeVendors(raw);
     if (resource === "pr") return normalizePrDocuments(raw);
-    return normalizePoDocuments(raw);
+    if (resource === "po") return normalizePoDocuments(raw);
+    return normalizeReceiptDocuments(raw);
   }
 
   private async processRecords(
     resource: Resource,
     runResourceId: string,
-    records: NormalizedRecord<VendorRecord | PrDocument | PoDocument>[],
+    records: NormalizedRecord<VendorRecord | PrDocument | PoDocument | ReceiptDocument>[],
     counters: ResourceCounters,
     apply: boolean,
   ): Promise<void> {
@@ -192,6 +198,12 @@ export class SyncEngine {
         if (!record.value || record.issues.some((issue) => FATAL_ISSUES.has(issue.code))) {
           counters.invalid += 1;
           await this.repository.recordResult(runResourceId, record.key, "invalid", record.hash, record.issues);
+          // Hanya kode issue yang tersimpan di audit; T-code asing perlu terlihat agar bisa ditinjau manusia.
+          for (const issue of record.issues) {
+            if (issue.code === "UNKNOWN_RECEIPT_TCODE") {
+              this.logger.warn({ event: "sap_sync_unknown_tcode", resource, businessKey: record.key, detail: issue.message }, "T-code penerimaan belum dikenali");
+            }
+          }
           continue;
         }
         counters.valid += 1;
@@ -208,10 +220,11 @@ export class SyncEngine {
     }
   }
 
-  private reconcile(resource: Resource, client: PoolClient, record: NormalizedRecord<VendorRecord | PrDocument | PoDocument>, apply: boolean): Promise<ReconcileResult> {
+  private reconcile(resource: Resource, client: PoolClient, record: NormalizedRecord<VendorRecord | PrDocument | PoDocument | ReceiptDocument>, apply: boolean): Promise<ReconcileResult> {
     if (resource === "vendor") return this.repository.reconcileVendor(client, record.value as VendorRecord, record.hash, apply);
     if (resource === "pr") return this.repository.reconcilePr(client, record.value as PrDocument, record.hash, apply);
-    return this.repository.reconcilePo(client, record.value as PoDocument, record.hash, apply);
+    if (resource === "po") return this.repository.reconcilePo(client, record.value as PoDocument, record.hash, apply);
+    return this.repository.reconcileReceipt(client, record.value as ReceiptDocument, record.hash, apply);
   }
 
   private errorCode(error: unknown): string {

@@ -7,3 +7,4 @@ secrets/id_ed25519.pub
 *.log
 .DS_Store
 tmp/
+compose.override.yaml

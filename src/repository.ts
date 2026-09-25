@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import type { DateWindow, Issue, PoDocument, PrDocument, RecordAction, Resource, ResourceCounters, RunStatus, SyncMode, Trigger, VendorRecord } from "./domain.js";
+import type { DateWindow, Issue, PoDocument, PrDocument, ReceiptDocument, RecordAction, Resource, ResourceCounters, RunStatus, SyncMode, Trigger, VendorRecord } from "./domain.js";
 
 const LOCK_KEY = 1_864_031_005;
 
@@ -216,6 +216,89 @@ export class Repository {
     }
     if (apply && poId) await this.reconcileLinks(client, poId, document.poNumber);
     return { action: existing ? "updated" : "inserted", issues };
+  }
+
+  async reconcileReceipt(client: PoolClient, document: ReceiptDocument, hash: string, apply: boolean): Promise<ReconcileResult> {
+    const found = await client.query<{ id: string; data_source: string | null; source_checksum: string | null }>(
+      "SELECT id,data_source,source_checksum FROM procurement_receipts WHERE sap_doc_number=$1 AND sap_doc_year=$2 FOR UPDATE",
+      [document.sapDocNumber, document.sapDocYear],
+    );
+    const existing = found.rows[0];
+    if (existing && existing.data_source !== "SAP") {
+      return { action: "conflict", issues: [{ code: "LOCAL_RECORD_CONFLICT", message: "Dokumen penerimaan sudah dimiliki record lokal" }] };
+    }
+
+    const issues = [...document.issues];
+    let vendorId: string | null = null;
+    if (document.vendorCode) {
+      const vendor = await client.query<{ id: string }>("SELECT id FROM vendor_registrations WHERE vendor_code=$1", [document.vendorCode]);
+      vendorId = vendor.rows[0]?.id ?? null;
+      if (!vendorId) issues.push({ code: "VENDOR_NOT_FOUND", message: `Vendor ${document.vendorCode} belum ditemukan` });
+    }
+
+    const poNumbers = [...new Set(document.items.map((item) => item.poNumber).filter((value): value is string => Boolean(value)))];
+    const poRows = poNumbers.length
+      ? (await client.query<{ id: string; po_number: string; project_id: string | null }>(
+          "SELECT id,po_number,project_id FROM purchase_orders WHERE po_number = ANY($1::text[])",
+          [poNumbers],
+        )).rows
+      : [];
+    const purchaseOrders = new Map(poRows.map((row) => [row.po_number, row]));
+    // Relasi belum ketemu tidak membatalkan baris; run berikutnya merekonsiliasi setelah PO masuk.
+    for (const poNumber of poNumbers) {
+      if (!purchaseOrders.has(poNumber)) issues.push({ code: "PO_NOT_FOUND", message: `PO ${poNumber} belum ditemukan` });
+    }
+    const headerPo = document.poNumber ? purchaseOrders.get(document.poNumber) : undefined;
+
+    let unitId: string | null = null;
+    if (document.plant) {
+      const unit = await client.query<{ id: string }>("SELECT id FROM units WHERE plant=$1", [document.plant]);
+      unitId = unit.rows[0]?.id ?? null;
+    }
+
+    if (existing?.source_checksum === hash) return { action: "unchanged", issues };
+    const action: RecordAction = existing ? "updated" : "inserted";
+    if (!apply) return { action, issues };
+
+    const upserted = await client.query<{ id: string }>(
+      `INSERT INTO procurement_receipts(sap_doc_number,sap_doc_year,sap_tcode,header_text,doc_date,posting_date,
+       sap_ref_doc_number,sap_ref_doc_year,vendor_code,vendor_id,customer_code,po_number,po_id,project_id,unit_id,
+       currency,total_qty,total_value,is_reversal,receipt_type,receipt_type_source,receipt_number,
+       data_source,source_key,source_checksum,last_synced_at,updated_at)
+       VALUES($1,$2,$3,$4,$5::date,$6::date,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'sap',$21,'SAP',$22,$23,now(),now())
+       ON CONFLICT (sap_doc_number,sap_doc_year) DO UPDATE SET
+       sap_tcode=EXCLUDED.sap_tcode,header_text=EXCLUDED.header_text,doc_date=EXCLUDED.doc_date,posting_date=EXCLUDED.posting_date,
+       sap_ref_doc_number=EXCLUDED.sap_ref_doc_number,sap_ref_doc_year=EXCLUDED.sap_ref_doc_year,
+       vendor_code=EXCLUDED.vendor_code,vendor_id=EXCLUDED.vendor_id,customer_code=EXCLUDED.customer_code,
+       po_number=EXCLUDED.po_number,po_id=EXCLUDED.po_id,project_id=EXCLUDED.project_id,unit_id=EXCLUDED.unit_id,
+       currency=EXCLUDED.currency,total_qty=EXCLUDED.total_qty,total_value=EXCLUDED.total_value,
+       is_reversal=EXCLUDED.is_reversal,receipt_type=EXCLUDED.receipt_type,receipt_type_source=EXCLUDED.receipt_type_source,
+       receipt_number=EXCLUDED.receipt_number,source_checksum=EXCLUDED.source_checksum,
+       last_synced_at=now(),updated_at=now()
+       RETURNING id`,
+      [
+        document.sapDocNumber, document.sapDocYear, document.sapTcode, document.headerText, document.docDate, document.postingDate,
+        document.sapRefDocNumber, document.sapRefDocYear, document.vendorCode, vendorId, document.customerCode,
+        document.poNumber, headerPo?.id ?? null, headerPo?.project_id ?? null, unitId,
+        document.currency, document.totalQty, document.totalValue, document.isReversal, document.receiptType,
+        document.receiptNumber, `${document.sapDocNumber}/${document.sapDocYear}`, hash,
+      ],
+    );
+    const receiptId = upserted.rows[0]!.id;
+    await client.query("DELETE FROM procurement_receipt_items WHERE receipt_id=$1", [receiptId]);
+    for (const item of document.items) {
+      await client.query(
+        `INSERT INTO procurement_receipt_items(receipt_id,line_id,item_text,material_code,plant,quantity,unit,amount,currency,
+         po_number,po_item_number,po_sap_key,po_id,pr_number,pr_item_number,sap_ref_item,is_reversal,updated_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now())`,
+        [
+          receiptId, item.lineId, item.itemText, item.materialCode, item.plant, item.quantity, item.unit, item.amount, item.currency,
+          item.poNumber, item.poItemNumber, item.poSapKey, item.poNumber ? purchaseOrders.get(item.poNumber)?.id ?? null : null,
+          item.prNumber, item.prItemNumber, item.sapRefItem, item.isReversal,
+        ],
+      );
+    }
+    return { action, issues };
   }
 
   private async reconcileLinks(client: PoolClient, poId: string, poNumber: string): Promise<void> {

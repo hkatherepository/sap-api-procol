@@ -10,6 +10,7 @@ const schema = z
     SAP_VENDOR_API_URL: z.string().url(),
     SAP_PR_API_URL: z.string().url(),
     SAP_PO_API_URL: z.string().url(),
+    SAP_GR_API_URL: z.string().url(),
     SAP_API_USERNAME: z.string().min(1),
     SAP_API_PASSWORD: z.string().min(1),
     SAP_HTTP_METHOD: z.enum(["GET", "POST"]).default("POST"),
@@ -58,7 +59,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
     env: env.NODE_ENV,
     databaseUrl: env.DATABASE_URL,
     sap: {
-      urls: { vendor: env.SAP_VENDOR_API_URL, pr: env.SAP_PR_API_URL, po: env.SAP_PO_API_URL },
+      urls: { vendor: env.SAP_VENDOR_API_URL, pr: env.SAP_PR_API_URL, po: env.SAP_PO_API_URL, gr: env.SAP_GR_API_URL },
       username: env.SAP_API_USERNAME,
       password: env.SAP_API_PASSWORD,
       method: env.SAP_HTTP_METHOD,

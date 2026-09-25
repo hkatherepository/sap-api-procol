@@ -7,7 +7,7 @@ import { jakartaToday, validateWindow } from "./utils.js";
 function selectedResources(value: string): Resource[] {
   if (value === "all") return [...RESOURCES];
   if (RESOURCES.includes(value as Resource)) return [value as Resource];
-  throw new Error("resource harus all, vendor, pr, atau po");
+  throw new Error(`resource harus all atau salah satu dari ${RESOURCES.join(", ")}`);
 }
 
 async function withApp<T>(callback: (app: ReturnType<typeof bootstrap>) => Promise<T>): Promise<T> {

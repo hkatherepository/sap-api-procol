@@ -1,4 +1,4 @@
-export const RESOURCES = ["vendor", "pr", "po"] as const;
+export const RESOURCES = ["vendor", "pr", "po", "gr"] as const;
 export type Resource = (typeof RESOURCES)[number];
 export type SyncMode = "dry_run" | "apply";
 export type Trigger = "cli" | "scheduler" | "retry";
@@ -66,6 +66,9 @@ export interface PrItem {
   purchasingOrganization: string | null;
   plant: string | null;
   materialGroup: string | null;
+  costCenter: string | null;
+  materialNumber: string | null;
+  materialDescription: string | null;
   description: string | null;
   quantity: string;
   unit: string | null;
@@ -116,5 +119,46 @@ export interface PoDocument {
   total: string | null;
   status: "DRAFT" | "ISSUED";
   items: PoItem[];
+  issues: Issue[];
+}
+
+export interface ReceiptItem {
+  lineId: number;
+  itemText: string | null;
+  materialCode: string | null;
+  plant: string | null;
+  quantity: string;
+  unit: string | null;
+  amount: string;
+  currency: string | null;
+  poNumber: string | null;
+  poItemNumber: string | null;
+  poSapKey: string | null;
+  prNumber: string | null;
+  prItemNumber: string | null;
+  sapRefItem: number | null;
+  isReversal: boolean;
+}
+
+export interface ReceiptDocument {
+  sapDocNumber: string;
+  sapDocYear: number;
+  sapTcode: string | null;
+  headerText: string | null;
+  docDate: string | null;
+  postingDate: string;
+  sapRefDocNumber: string | null;
+  sapRefDocYear: number | null;
+  vendorCode: string | null;
+  customerCode: string | null;
+  poNumber: string | null;
+  plant: string | null;
+  currency: string | null;
+  totalQty: string;
+  totalValue: string;
+  isReversal: boolean;
+  receiptType: "barang" | "jasa";
+  receiptNumber: string;
+  items: ReceiptItem[];
   issues: Issue[];
 }
