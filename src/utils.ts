@@ -121,3 +121,13 @@ export function chunk<T>(items: T[], size: number): T[][] {
   for (let index = 0; index < items.length; index += size) result.push(items.slice(index, index + size));
   return result;
 }
+
+// ponytail: GR/SES mengirim angka sebagai JSON number (863024.97 = desimal), bukan string
+// format Indonesia seperti NETPR pada PO. Parser dipisah per resource supaya titik desimal
+// tidak pernah dibaca sebagai pemisah ribuan (dan sebaliknya).
+export function parsePlainNumber(value: unknown): Decimal {
+  const raw = cleanString(value);
+  if (!raw) throw new Error("angka kosong");
+  if (!/^-?\d+(\.\d+)?$/.test(raw)) throw new Error(`bukan angka JSON polos: ${raw}`);
+  return new Decimal(raw);
+}

@@ -29,7 +29,7 @@ CREATE INDEX IF NOT EXISTS sap_sync_runs_status_created_idx ON sap_sync_runs(sta
 CREATE TABLE IF NOT EXISTS sap_sync_run_resources (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES sap_sync_runs(id) ON DELETE CASCADE,
-  resource text NOT NULL CHECK (resource IN ('vendor', 'pr', 'po')),
+  resource text NOT NULL CHECK (resource IN ('vendor', 'pr', 'po', 'gr')),
   filter_low char(8) NOT NULL,
   filter_high char(8) NOT NULL,
   status text NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'partial', 'failed')),
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS sap_sync_record_results (
 CREATE INDEX IF NOT EXISTS sap_sync_record_results_action_idx ON sap_sync_record_results(action, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS sap_sync_checkpoints (
-  resource text PRIMARY KEY CHECK (resource IN ('vendor', 'pr', 'po')),
+  resource text PRIMARY KEY CHECK (resource IN ('vendor', 'pr', 'po', 'gr')),
   checkpoint_high char(8) NOT NULL,
   successful_run_resource_id uuid NOT NULL REFERENCES sap_sync_run_resources(id),
   updated_at timestamptz NOT NULL DEFAULT now()

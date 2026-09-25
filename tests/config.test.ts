@@ -7,6 +7,7 @@ const base = {
   SAP_VENDOR_API_URL: "https://sap.test/vendor",
   SAP_PR_API_URL: "https://sap.test/pr",
   SAP_PO_API_URL: "https://sap.test/po",
+  SAP_GR_API_URL: "https://sap.test/po",
   SAP_API_USERNAME: "user",
   SAP_API_PASSWORD: "secret",
   SAP_FILTER_TRANSPORT: "query_parameter",
