@@ -209,6 +209,11 @@ export class SyncEngine {
         counters.valid += 1;
         try {
           const result = await inTransaction(this.pool, (client) => this.reconcile(resource, client, record, apply));
+          // Dokumen belum release: tidak dihitung dan tidak dicatat di audit agar DB tidak ikut tumbuh.
+          if (result.action === "skipped") {
+            counters.valid -= 1;
+            continue;
+          }
           counters[result.action] += 1;
           await this.repository.recordResult(runResourceId, record.key, result.action, record.hash, [...record.issues, ...result.issues]);
         } catch (error) {

@@ -38,6 +38,7 @@ const poSample = {
   MENGE: "1",
   MEINS: "AU",
   NETPR: "187.200.000",
+  PEINH: "        1",
   WAERS: "IDR",
   FRGKE: "G",
 };
@@ -120,6 +121,12 @@ describe("normalisasi PR", () => {
     const [record] = normalizePrDocuments([{ ...prSample, KEY: "wrong" }]);
     expect(record?.issues.map((issue) => issue.code)).toContain("KEY_MISMATCH");
   });
+
+  it("menghitung MENGE format baru dengan PREIS ÷ PEINH tanpa pembulatan", () => {
+    const [record] = normalizePrDocuments([{ ...prSample, MENGE: "1.287,24", PREIS: "14.860", PEINH: "        1" }]);
+    expect(record?.value?.items[0]).toMatchObject({ quantity: "1287.24", price: "14860", priceUnit: "1", lineTotal: "19128386.4" });
+    expect(record?.value?.total).toBe("19128386.4");
+  });
 });
 
 describe("normalisasi PO", () => {
@@ -158,6 +165,33 @@ describe("normalisasi PO", () => {
       { ...poSample, KEY: "435000612700020", EBELP: 20, BUKRS: "HK04" },
     ]);
     expect(records[0]?.issues.map((issue) => issue.code)).toContain("INCONSISTENT_COMPANY");
+  });
+
+  it("membagi NETPR dengan PEINH 100", () => {
+    const [record] = normalizePoDocuments([{ ...poSample, MENGE: "16.000", MEINS: "L", NETPR: "1.583.125", PEINH: "                          100" }]);
+    expect(record?.issues).toEqual([]);
+    expect(record?.value?.items[0]).toMatchObject({ quantity: "16000", netPrice: "1583125", priceUnit: "100", lineTotal: "253300000" });
+    expect(record?.value?.total).toBe("253300000");
+  });
+
+  it("PEINH 1 sama dengan formula lama", () => {
+    const [record] = normalizePoDocuments([{ ...poSample, MENGE: "113,4", NETPR: "141.646", PEINH: "1" }]);
+    expect(record?.value?.items[0]).toMatchObject({ quantity: "113.4", netPrice: "141646", priceUnit: "1", lineTotal: "16062656.4" });
+  });
+
+  it("mengali dulu lalu membagi (tanpa premature rounding)", () => {
+    const [record] = normalizePoDocuments([{ ...poSample, MENGE: "3", NETPR: "10", PEINH: "3" }]);
+    expect(record?.value?.items[0]?.lineTotal).toBe("10");
+  });
+
+  it("menolak PEINH 0", () => {
+    const records = normalizePoDocuments([{ ...poSample, PEINH: "0" }]);
+    expect(records[0]?.issues.map((issue) => issue.code)).toContain("INVALID_PRICE_UNIT");
+  });
+
+  it.each([undefined, "abc"])("menolak PEINH %s", (peinh) => {
+    const codes = normalizePoDocuments([{ ...poSample, PEINH: peinh }])[0]?.issues.map((issue) => issue.code);
+    expect(codes).toEqual(expect.arrayContaining(["INVALID_NUMBER", "INVALID_PRICE_UNIT"]));
   });
 });
 

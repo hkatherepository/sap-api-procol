@@ -153,6 +153,9 @@ export class Repository {
     );
     const existing = result.rows[0];
     if (existing && existing.data_source !== "SAP") return { action: "conflict", issues: [{ code: "LOCAL_RECORD_CONFLICT", message: "Nomor PR sudah dimiliki record lokal" }] };
+    // PR baru yang belum full release (FRGKZ != '2') tidak disimpan. CONVERTED ikut lolos karena SAP
+    // tidak mengizinkan PO dibuat dari PR yang belum release. PR yang sudah ada tetap di-update.
+    if (!existing && document.status === "SUBMITTED") return { action: "skipped", issues: [] };
     if (existing?.source_checksum === hash) return { action: "unchanged", issues: document.issues };
     if (!existing) {
       if (apply) {
@@ -183,6 +186,8 @@ export class Repository {
     );
     const existing = result.rows[0];
     if (existing && existing.data_source !== "SAP") return { action: "conflict", issues: [{ code: "LOCAL_RECORD_CONFLICT", message: "Nomor PO sudah dimiliki record lokal" }] };
+    // PO baru yang belum full release (FRGKE != 'G') tidak disimpan; PO yang sudah ada tetap di-update.
+    if (!existing && document.status !== "ISSUED") return { action: "skipped", issues: [] };
     const vendor = await client.query<{ id: string }>(
       "SELECT id FROM vendor_registrations WHERE vendor_code=$1",
       [document.vendorCode],

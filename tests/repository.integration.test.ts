@@ -133,7 +133,7 @@ describeDatabase("Repository PostgreSQL", () => {
       sourceCreatedBy: "SAPUSER",
       currency: "IDR",
       total: "10",
-      status: "SUBMITTED",
+      status: "APPROVED",
       items: [],
       issues: [],
     };
@@ -187,7 +187,8 @@ describeDatabase("Repository PostgreSQL", () => {
     };
     try {
       await client.query("BEGIN");
-      await repository.reconcilePr(client, pr, "1".repeat(64), true);
+      expect((await repository.reconcilePr(client, pr, "1".repeat(64), true)).action).toBe("skipped");
+      expect((await client.query("SELECT 1 FROM purchase_requests WHERE pr_number=$1", [prNumber])).rowCount).toBe(0);
       await repository.reconcilePr(client, { ...pr, status: "APPROVED" }, "2".repeat(64), true);
       expect((await client.query("SELECT status FROM purchase_requests WHERE pr_number=$1", [prNumber])).rows[0]?.status).toBe("approved");
       await repository.reconcilePr(client, { ...pr, status: "CONVERTED" }, "3".repeat(64), true);
@@ -197,11 +198,10 @@ describeDatabase("Repository PostgreSQL", () => {
       await repository.reconcilePr(client, { ...pr, status: "APPROVED" }, "5".repeat(64), true);
       expect((await client.query("SELECT status FROM purchase_requests WHERE pr_number=$1", [prNumber])).rows[0]?.status).toBe("rejected");
 
-      await repository.reconcilePo(client, po, "6".repeat(64), true);
-      let storedPo = (await client.query<{ status: string; issued_at: Date | null }>("SELECT status,issued_at FROM purchase_orders WHERE po_number=$1", [poNumber])).rows[0]!;
-      expect(storedPo).toMatchObject({ status: "draft", issued_at: null });
+      expect((await repository.reconcilePo(client, po, "6".repeat(64), true)).action).toBe("skipped");
+      expect((await client.query("SELECT 1 FROM purchase_orders WHERE po_number=$1", [poNumber])).rowCount).toBe(0);
       await repository.reconcilePo(client, { ...po, status: "ISSUED" }, "7".repeat(64), true);
-      storedPo = (await client.query("SELECT status,issued_at FROM purchase_orders WHERE po_number=$1", [poNumber])).rows[0]!;
+      let storedPo = (await client.query<{ status: string; issued_at: Date | null }>("SELECT status,issued_at FROM purchase_orders WHERE po_number=$1", [poNumber])).rows[0]!;
       expect(storedPo.status).toBe("issued");
       expect(storedPo.issued_at).not.toBeNull();
       await repository.reconcilePo(client, po, "8".repeat(64), true);
@@ -260,7 +260,7 @@ describeDatabase("Repository PostgreSQL", () => {
       }],
       po: [{
         KEY: `${poNumber}00010`, EBELN: poNumber, EBELP: 10, LOEKZ: "", AEDAT: "2026-08-05",
-        LIFNR: vendorCode, NAME_VEND: "E2E VENDOR", BUKRS: "HK03", MENGE: "2", NETPR: "100.000", WAERS: "IDR", FRGKE: "G",
+        LIFNR: vendorCode, NAME_VEND: "E2E VENDOR", BUKRS: "HK03", MENGE: "2", NETPR: "100.000", PEINH: "1", WAERS: "IDR", FRGKE: "G",
       }],
     };
     const sap = { fetch: async (resource: keyof typeof payloads) => payloads[resource] } as unknown as SapClient;

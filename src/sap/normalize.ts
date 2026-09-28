@@ -193,9 +193,11 @@ function normalizePoItem(raw: Raw, index: number): NormalizedRecord<{ poNumber: 
   if (number && sapKey && sapKey !== `${poNumber}${number}`) issues.push({ code: "KEY_MISMATCH", field: "KEY", message: "KEY tidak sama dengan EBELN + EBELP(5 digit)" });
   let quantity = new Decimal(0);
   let netPrice = new Decimal(0);
+  let priceUnit = new Decimal(0);
   for (const [field, assign] of [
     ["MENGE", (value: Decimal) => (quantity = value)],
     ["NETPR", (value: Decimal) => (netPrice = value)],
+    ["PEINH", (value: Decimal) => (priceUnit = value)],
   ] as const) {
     try {
       assign(parseSapDecimal(raw[field]));
@@ -203,6 +205,7 @@ function normalizePoItem(raw: Raw, index: number): NormalizedRecord<{ poNumber: 
       issues.push({ code: "INVALID_NUMBER", field, message: error instanceof Error ? error.message : "angka tidak valid" });
     }
   }
+  if (priceUnit.lte(0)) issues.push({ code: "INVALID_PRICE_UNIT", field: "PEINH", message: "PEINH harus lebih dari nol" });
   const deleteIndicator = cleanString(raw.LOEKZ) ?? "";
   const item: PoItem = {
     sapKey,
@@ -215,9 +218,12 @@ function normalizePoItem(raw: Raw, index: number): NormalizedRecord<{ poNumber: 
     quantity: quantity.toFixed(),
     unit: cleanString(raw.MEINS),
     netPrice: netPrice.toFixed(),
+    priceUnit: priceUnit.toFixed(),
     releaseIndicator: cleanString(raw.FRGKE),
     currency: cleanString(raw.WAERS),
-    lineTotal: deleteIndicator ? null : quantity.mul(netPrice).toFixed(),
+    // NETPR berlaku per PEINH unit: lineTotal = MENGE × (NETPR ÷ PEINH).
+    // Dikali dulu, dibagi terakhir agar Decimal tidak membulatkan harga efektif lebih awal.
+    lineTotal: !deleteIndicator && priceUnit.gt(0) ? quantity.mul(netPrice).div(priceUnit).toFixed() : null,
   };
   const value = { poNumber, sourceDate, sourceCreatedBy: cleanString(raw.AENAM), vendorCode, vendorName: cleanString(raw.NAME_VEND), item };
   return issues.length > 0 ? { ...invalid(`${poNumber}:${number ?? index}`, issues), value } : { key: `${poNumber}:${number}`, hash: hashJson(value), value, issues };
