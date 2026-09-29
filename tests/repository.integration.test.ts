@@ -2,11 +2,17 @@ import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Repository } from "../src/repository.js";
-import type { PoDocument, PrDocument, VendorRecord } from "../src/domain.js";
+import type { PoDocument, PoItem, PrDocument, PrItem, VendorRecord } from "../src/domain.js";
 import type { AppConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
 import { SyncEngine } from "../src/sync-engine.js";
 import type { SapClient } from "../src/sap/client.js";
+
+// Status dihitung ulang dari item gabungan, jadi status diwakili lewat kode release item.
+const prItem = (releaseIndicator: string | null, poNumber: string | null = null) =>
+  ({ itemNumber: "00010", isDeleted: false, currency: "IDR", lineTotal: "10", releaseIndicator, poNumber }) as unknown as PrItem;
+const poItem = (releaseIndicator: string | null) =>
+  ({ itemNumber: "00010", isDeleted: false, currency: "IDR", lineTotal: "10", releaseIndicator }) as unknown as PoItem;
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeDatabase = databaseUrl ? describe : describe.skip;
@@ -111,7 +117,7 @@ describeDatabase("Repository PostgreSQL", () => {
         currency: "IDR",
         total: "100",
         status: "ISSUED",
-        items: [],
+        items: [poItem("G")],
         issues: [],
       };
       const poResult = await repository.reconcilePo(client, po, "e".repeat(64), true);
@@ -134,7 +140,7 @@ describeDatabase("Repository PostgreSQL", () => {
       currency: "IDR",
       total: "10",
       status: "APPROVED",
-      items: [],
+      items: [prItem("2")],
       issues: [],
     };
     const client = await pool.connect();
@@ -170,7 +176,7 @@ describeDatabase("Repository PostgreSQL", () => {
       currency: "IDR",
       total: "10",
       status: "SUBMITTED",
-      items: [],
+      items: [prItem(null)],
       issues: [],
     };
     const po: PoDocument = {
@@ -182,25 +188,25 @@ describeDatabase("Repository PostgreSQL", () => {
       currency: "IDR",
       total: "10",
       status: "DRAFT",
-      items: [],
+      items: [poItem(null)],
       issues: [],
     };
     try {
       await client.query("BEGIN");
       expect((await repository.reconcilePr(client, pr, "1".repeat(64), true)).action).toBe("skipped");
       expect((await client.query("SELECT 1 FROM purchase_requests WHERE pr_number=$1", [prNumber])).rowCount).toBe(0);
-      await repository.reconcilePr(client, { ...pr, status: "APPROVED" }, "2".repeat(64), true);
+      await repository.reconcilePr(client, { ...pr, items: [prItem("2")] }, "2".repeat(64), true);
       expect((await client.query("SELECT status FROM purchase_requests WHERE pr_number=$1", [prNumber])).rows[0]?.status).toBe("approved");
-      await repository.reconcilePr(client, { ...pr, status: "CONVERTED" }, "3".repeat(64), true);
+      await repository.reconcilePr(client, { ...pr, items: [prItem("2", "PO-1")] }, "3".repeat(64), true);
       await repository.reconcilePr(client, pr, "4".repeat(64), true);
       expect((await client.query("SELECT status FROM purchase_requests WHERE pr_number=$1", [prNumber])).rows[0]?.status).toBe("submitted");
       await client.query("UPDATE purchase_requests SET status='rejected' WHERE pr_number=$1", [prNumber]);
-      await repository.reconcilePr(client, { ...pr, status: "APPROVED" }, "5".repeat(64), true);
+      await repository.reconcilePr(client, { ...pr, items: [prItem("2")] }, "5".repeat(64), true);
       expect((await client.query("SELECT status FROM purchase_requests WHERE pr_number=$1", [prNumber])).rows[0]?.status).toBe("rejected");
 
       expect((await repository.reconcilePo(client, po, "6".repeat(64), true)).action).toBe("skipped");
       expect((await client.query("SELECT 1 FROM purchase_orders WHERE po_number=$1", [poNumber])).rowCount).toBe(0);
-      await repository.reconcilePo(client, { ...po, status: "ISSUED" }, "7".repeat(64), true);
+      await repository.reconcilePo(client, { ...po, items: [poItem("G")] }, "7".repeat(64), true);
       let storedPo = (await client.query<{ status: string; issued_at: Date | null }>("SELECT status,issued_at FROM purchase_orders WHERE po_number=$1", [poNumber])).rows[0]!;
       expect(storedPo.status).toBe("issued");
       expect(storedPo.issued_at).not.toBeNull();
@@ -266,7 +272,7 @@ describeDatabase("Repository PostgreSQL", () => {
     const sap = { fetch: async (resource: keyof typeof payloads) => payloads[resource] } as unknown as SapClient;
     const engine = new SyncEngine(config, pool, repository, sap, createLogger(config));
 
-    const firstRun = await engine.run({ trigger: "cli", mode: "apply", window: { low: "20260805", high: "20260805" } });
+    const firstRun = await engine.run({ trigger: "cli", mode: "apply", resources: ["vendor", "pr", "po"], window: { low: "20260805", high: "20260805" } });
     const firstCounts = await pool.query<{ resource: string; inserted: number }>(
       "SELECT resource,inserted FROM sap_sync_run_resources WHERE run_id=$1 ORDER BY resource",
       [firstRun],
@@ -278,7 +284,7 @@ describeDatabase("Repository PostgreSQL", () => {
     ]);
     expect((await pool.query("SELECT count(*)::int AS count FROM sap_document_links WHERE po_number=$1", [poNumber])).rows[0].count).toBe(1);
 
-    const secondRun = await engine.run({ trigger: "cli", mode: "apply", window: { low: "20260805", high: "20260805" } });
+    const secondRun = await engine.run({ trigger: "cli", mode: "apply", resources: ["vendor", "pr", "po"], window: { low: "20260805", high: "20260805" } });
     const secondCounts = await pool.query<{ unchanged: number; inserted: number; updated: number }>(
       "SELECT unchanged,inserted,updated FROM sap_sync_run_resources WHERE run_id=$1 ORDER BY resource",
       [secondRun],

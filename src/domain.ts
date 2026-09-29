@@ -1,5 +1,8 @@
 export const RESOURCES = ["vendor", "pr", "po", "gr"] as const;
 export type Resource = (typeof RESOURCES)[number];
+// Resource yang ikut scheduler dan `--resource all`. Vendor dimatikan sementara karena data vendor
+// sekarang di-post dari sumber lain; masih bisa dijalankan manual lewat `--resource vendor`.
+export const SYNC_RESOURCES: Resource[] = [/* "vendor", */ "pr", "po", "gr"];
 export type SyncMode = "dry_run" | "apply";
 export type Trigger = "cli" | "scheduler" | "retry";
 export type RunStatus = "pending" | "running" | "completed" | "partial" | "failed" | "skipped_locked";

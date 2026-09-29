@@ -72,6 +72,11 @@ export function splitMonthlyWindows(low: string, high: string): DateWindow[] {
   return windows;
 }
 
+// Tanggal 1 dari `monthsBack` bulan sebelum bulan `compact` (YYYYMMDD).
+export function monthStart(compact: string, monthsBack = 0): string {
+  return compactDate(new Date(Date.UTC(Number(compact.slice(0, 4)), Number(compact.slice(4, 6)) - 1 - monthsBack, 1)));
+}
+
 export function jakartaToday(now = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Jakarta",

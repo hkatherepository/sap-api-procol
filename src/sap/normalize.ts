@@ -24,6 +24,31 @@ function required(raw: Raw, field: string, issues: Issue[]): string | null {
   return value;
 }
 
+// SAP menyimpan nilai uang dengan 2 desimal internal; mata uang tanpa desimal (TCURX) jadi terbagi 100.
+// API GR mengirim DMBTR format internal (dikonfirmasi ABAP), jadi dikembalikan ke nilai sebenarnya di sini.
+// ponytail: daftar statis mata uang 0 desimal; tambah kode lain bila muncul di WAERS.
+const ZERO_DECIMAL_CURRENCIES = new Set(["IDR", "JPY", "KRW", "VND"]);
+
+function externalAmount(amount: Decimal, currency: string | null): Decimal {
+  return currency && ZERO_DECIMAL_CURRENCIES.has(currency.toUpperCase()) ? amount.mul(100) : amount;
+}
+
+// PEINH 0 atau kosong dari SAP dianggap harga per 1 unit (dikonfirmasi user); teks non-angka tetap fatal.
+function priceUnitField(raw: Raw, issues: Issue[]): Decimal {
+  const defaulted = () => {
+    issues.push({ code: "PRICE_UNIT_DEFAULTED", field: "PEINH", message: "PEINH 0/kosong, dihitung sebagai 1" });
+    return new Decimal(1);
+  };
+  if (!cleanString(raw.PEINH)) return defaulted();
+  try {
+    const value = parseSapDecimal(raw.PEINH);
+    return value.gt(0) ? value : defaulted();
+  } catch (error) {
+    issues.push({ code: "INVALID_NUMBER", field: "PEINH", message: error instanceof Error ? error.message : "angka tidak valid" });
+    return new Decimal(1);
+  }
+}
+
 function dateField(raw: Raw, field: string, issues: Issue[]): string | null {
   const value = parseSapDate(raw[field]);
   if (!value) issues.push({ code: "INVALID_DATE", field, message: `${field} bukan tanggal SAP valid` });
@@ -83,11 +108,9 @@ function normalizePrItem(raw: Raw, index: number): NormalizedRecord<{ prNumber: 
   }
   let quantity = new Decimal(0);
   let price = new Decimal(0);
-  let priceUnit = new Decimal(0);
   for (const [field, assign] of [
     ["MENGE", (value: Decimal) => (quantity = value)],
     ["PREIS", (value: Decimal) => (price = value)],
-    ["PEINH", (value: Decimal) => (priceUnit = value)],
   ] as const) {
     try {
       assign(parseSapDecimal(raw[field]));
@@ -95,7 +118,7 @@ function normalizePrItem(raw: Raw, index: number): NormalizedRecord<{ prNumber: 
       issues.push({ code: "INVALID_NUMBER", field, message: error instanceof Error ? error.message : "angka tidak valid" });
     }
   }
-  if (priceUnit.lte(0)) issues.push({ code: "INVALID_PRICE_UNIT", field: "PEINH", message: "PEINH harus lebih dari nol" });
+  const priceUnit = priceUnitField(raw, issues);
   const deleteIndicator = cleanString(raw.LOEKZ) ?? "";
   const poNumber = cleanString(raw.EBELN);
   const poItem = poNumber ? itemNumber(raw.EBELP) : null;
@@ -126,6 +149,36 @@ function normalizePrItem(raw: Raw, index: number): NormalizedRecord<{ prNumber: 
   };
   const value = { prNumber, sourceDate, sourceCreatedBy: cleanString(raw.ERNAM), item };
   return issues.length > 0 ? { ...invalid(`${prNumber}:${number ?? index}`, issues), value } : { key: `${prNumber}:${number}`, hash: hashJson(value), value, issues };
+}
+
+function summarizeTotal<T extends { isDeleted: boolean; currency: string | null; lineTotal: string | null }>(items: T[]) {
+  const currencies = new Set(items.map((item) => item.currency).filter(Boolean));
+  const active = items.filter((item) => !item.isDeleted);
+  return {
+    active,
+    currency: currencies.size === 1 ? [...currencies][0]! : null,
+    total: currencies.size <= 1 ? active.reduce((sum, item) => sum.add(item.lineTotal ?? 0), new Decimal(0)).toFixed() : null,
+  };
+}
+
+// Total & status dihitung dari seluruh item dokumen; dipakai ulang setelah item digabung di repository.
+export function summarizePr(items: PrItem[]): Pick<PrDocument, "currency" | "total" | "status"> {
+  const { active, currency, total } = summarizeTotal(items);
+  const status = active.length > 0 && active.every((item) => item.poNumber)
+    ? "CONVERTED"
+    : active.length > 0 && active.every((item) => item.releaseIndicator === "2")
+      ? "APPROVED"
+      : "SUBMITTED";
+  return { currency, total, status };
+}
+
+// FRGKE yang berarti PO sudah full release.
+const PO_RELEASED = new Set(["G", "2"]);
+
+export function summarizePo(items: PoItem[]): Pick<PoDocument, "currency" | "total" | "status"> {
+  const { active, currency, total } = summarizeTotal(items);
+  const released = active.length > 0 && active.every((item) => item.releaseIndicator !== null && PO_RELEASED.has(item.releaseIndicator));
+  return { currency, total, status: released ? "ISSUED" : "DRAFT" };
 }
 
 export function normalizePrDocuments(rows: unknown[]): NormalizedRecord<PrDocument>[] {
@@ -160,20 +213,13 @@ function groupPr(items: NormalizedRecord<{ prNumber: string; sourceDate: string;
     const sorted = [...uniqueItems.values()].map((record) => record.value!.item).sort((a, b) => a.itemNumber.localeCompare(b.itemNumber));
     const currencies = new Set(sorted.map((item) => item.currency).filter(Boolean));
     if (currencies.size > 1) issues.push({ code: "MULTI_CURRENCY", message: `PR ${prNumber} memiliki lebih dari satu currency` });
-    const active = sorted.filter((item) => !item.isDeleted);
-    if (active.length === 0) issues.push({ code: "ALL_ITEMS_DELETED", message: `Seluruh item PR ${prNumber} bertanda hapus` });
+    if (sorted.every((item) => item.isDeleted)) issues.push({ code: "ALL_ITEMS_DELETED", message: `Seluruh item PR ${prNumber} bertanda hapus` });
     const first = group[0]!.value!;
     const document: PrDocument = {
       prNumber,
       sourceDate: first.sourceDate,
       sourceCreatedBy: first.sourceCreatedBy,
-      currency: currencies.size === 1 ? [...currencies][0]! : null,
-      total: currencies.size <= 1 ? active.reduce((sum, item) => sum.add(item.lineTotal ?? 0), new Decimal(0)).toFixed() : null,
-      status: active.length > 0 && active.every((item) => item.poNumber)
-        ? "CONVERTED"
-        : active.length > 0 && active.every((item) => item.releaseIndicator === "2")
-          ? "APPROVED"
-          : "SUBMITTED",
+      ...summarizePr(sorted),
       items: sorted,
       issues,
     };
@@ -193,11 +239,9 @@ function normalizePoItem(raw: Raw, index: number): NormalizedRecord<{ poNumber: 
   if (number && sapKey && sapKey !== `${poNumber}${number}`) issues.push({ code: "KEY_MISMATCH", field: "KEY", message: "KEY tidak sama dengan EBELN + EBELP(5 digit)" });
   let quantity = new Decimal(0);
   let netPrice = new Decimal(0);
-  let priceUnit = new Decimal(0);
   for (const [field, assign] of [
     ["MENGE", (value: Decimal) => (quantity = value)],
     ["NETPR", (value: Decimal) => (netPrice = value)],
-    ["PEINH", (value: Decimal) => (priceUnit = value)],
   ] as const) {
     try {
       assign(parseSapDecimal(raw[field]));
@@ -205,7 +249,7 @@ function normalizePoItem(raw: Raw, index: number): NormalizedRecord<{ poNumber: 
       issues.push({ code: "INVALID_NUMBER", field, message: error instanceof Error ? error.message : "angka tidak valid" });
     }
   }
-  if (priceUnit.lte(0)) issues.push({ code: "INVALID_PRICE_UNIT", field: "PEINH", message: "PEINH harus lebih dari nol" });
+  const priceUnit = priceUnitField(raw, issues);
   const deleteIndicator = cleanString(raw.LOEKZ) ?? "";
   const item: PoItem = {
     sapKey,
@@ -262,16 +306,13 @@ export function normalizePoDocuments(rows: unknown[]): NormalizedRecord<PoDocume
     if (companies.size > 1) issues.push({ code: "INCONSISTENT_COMPANY", message: `PO ${poNumber} memiliki company berbeda` });
     if (vendorCodes.size > 1) issues.push({ code: "INCONSISTENT_VENDOR", message: `PO ${poNumber} memiliki vendor berbeda` });
     const first = group[0]!.value!;
-    const active = sorted.filter((item) => !item.isDeleted);
     const document: PoDocument = {
       poNumber,
       sourceDate: first.sourceDate,
       sourceCreatedBy: first.sourceCreatedBy,
       vendorCode: first.vendorCode,
       vendorNameSnapshot: first.vendorName,
-      currency: currencies.size === 1 ? [...currencies][0]! : null,
-      total: currencies.size <= 1 ? active.reduce((sum, item) => sum.add(item.lineTotal ?? 0), new Decimal(0)).toFixed() : null,
-      status: active.length > 0 && active.every((item) => item.releaseIndicator === "G") ? "ISSUED" : "DRAFT",
+      ...summarizePo(sorted),
       items: sorted,
       issues,
     };
@@ -358,7 +399,7 @@ function normalizeReceiptRow(raw: Raw, tcode: string, index: number): Normalized
     plant: cleanString(raw.WERKS),
     quantity: quantity.toFixed(),
     unit: cleanString(raw.ERFME),
-    amount: amount.toFixed(),
+    amount: externalAmount(amount, cleanString(raw.WAERS)).toFixed(),
     currency: cleanString(raw.WAERS),
     poNumber,
     poItemNumber,

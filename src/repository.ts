@@ -1,7 +1,21 @@
 import type { Pool, PoolClient } from "pg";
-import type { DateWindow, Issue, PoDocument, PrDocument, ReceiptDocument, RecordAction, Resource, ResourceCounters, RunStatus, SyncMode, Trigger, VendorRecord } from "./domain.js";
+import { summarizePo, summarizePr } from "./sap/normalize.js";
+import { hashJson } from "./utils.js";
+import type { DateWindow, Issue, PoDocument, PoItem, PrDocument, PrItem, ReceiptDocument, RecordAction, Resource, ResourceCounters, RunStatus, SyncMode, Trigger, VendorRecord } from "./domain.js";
 
 const LOCK_KEY = 1_864_031_005;
+
+// Filter tanggal SAP bekerja per item, jadi satu window bisa membawa sebagian item dokumen.
+// Item digabung per nomor item: yang datang menimpa, yang tidak ikut terkirim tetap disimpan.
+export function mergeItems<T extends { itemNumber: string }>(stored: T[] | null | undefined, incoming: T[]): T[] {
+  const merged = new Map((stored ?? []).map((item) => [item.itemNumber, item]));
+  for (const item of incoming) merged.set(item.itemNumber, item);
+  return [...merged.values()].sort((a, b) => a.itemNumber.localeCompare(b.itemNumber));
+}
+
+function earliestDate(stored: string | null | undefined, incoming: string): string {
+  return stored && stored < incoming ? stored : incoming;
+}
 
 export interface ReconcileResult {
   action: RecordAction;
@@ -96,10 +110,12 @@ export class Repository {
   }
 
   async advanceCheckpoint(resource: Resource, high: string, runResourceId: string): Promise<void> {
+    // Hanya maju: backfill rentang lama lewat CLI tidak boleh memundurkan checkpoint scheduler.
     await this.pool.query(
       `INSERT INTO sap_sync_checkpoints(resource,checkpoint_high,successful_run_resource_id)
        VALUES ($1,$2,$3) ON CONFLICT(resource) DO UPDATE SET checkpoint_high=EXCLUDED.checkpoint_high,
-       successful_run_resource_id=EXCLUDED.successful_run_resource_id,updated_at=now()`,
+       successful_run_resource_id=EXCLUDED.successful_run_resource_id,updated_at=now()
+       WHERE sap_sync_checkpoints.checkpoint_high <= EXCLUDED.checkpoint_high`,
       [resource, high, runResourceId],
     );
   }
@@ -146,16 +162,18 @@ export class Repository {
     return { action: "updated", issues: [] };
   }
 
-  async reconcilePr(client: PoolClient, document: PrDocument, hash: string, apply: boolean): Promise<ReconcileResult> {
-    const result = await client.query<{ id: string; data_source: string | null; source_checksum: string | null }>(
-      "SELECT id,data_source,source_checksum FROM purchase_requests WHERE pr_number=$1 FOR UPDATE",
-      [document.prNumber],
+  async reconcilePr(client: PoolClient, incoming: PrDocument, hash: string, apply: boolean): Promise<ReconcileResult> {
+    const result = await client.query<{ id: string; data_source: string | null; source_checksum: string | null; items: PrItem[] | null; source_date: string | null }>(
+      "SELECT id,data_source,source_checksum,items,source_date::text AS source_date FROM purchase_requests WHERE pr_number=$1 FOR UPDATE",
+      [incoming.prNumber],
     );
     const existing = result.rows[0];
     if (existing && existing.data_source !== "SAP") return { action: "conflict", issues: [{ code: "LOCAL_RECORD_CONFLICT", message: "Nomor PR sudah dimiliki record lokal" }] };
-    // PR baru yang belum full release (FRGKZ != '2') tidak disimpan. CONVERTED ikut lolos karena SAP
-    // tidak mengizinkan PO dibuat dari PR yang belum release. PR yang sudah ada tetap di-update.
+    const items = mergeItems(existing?.items, incoming.items);
+    const document: PrDocument = { ...incoming, items, sourceDate: earliestDate(existing?.source_date, incoming.sourceDate), ...summarizePr(items) };
+    // PR baru yang belum full release (FRGKZ != '2') tidak disimpan; PR yang sudah ada tetap di-update.
     if (!existing && document.status === "SUBMITTED") return { action: "skipped", issues: [] };
+    hash = hashJson({ ...document, issues: undefined });
     if (existing?.source_checksum === hash) return { action: "unchanged", issues: document.issues };
     if (!existing) {
       if (apply) {
@@ -179,14 +197,16 @@ export class Repository {
     return { action: "updated", issues: document.issues };
   }
 
-  async reconcilePo(client: PoolClient, document: PoDocument, hash: string, apply: boolean): Promise<ReconcileResult> {
-    const result = await client.query<{ id: string; data_source: string | null; source_checksum: string | null }>(
-      "SELECT id,data_source,source_checksum FROM purchase_orders WHERE po_number=$1 FOR UPDATE",
-      [document.poNumber],
+  async reconcilePo(client: PoolClient, incoming: PoDocument, hash: string, apply: boolean): Promise<ReconcileResult> {
+    const result = await client.query<{ id: string; data_source: string | null; source_checksum: string | null; items: PoItem[] | null; source_date: string | null }>(
+      "SELECT id,data_source,source_checksum,items,source_date::text AS source_date FROM purchase_orders WHERE po_number=$1 FOR UPDATE",
+      [incoming.poNumber],
     );
     const existing = result.rows[0];
     if (existing && existing.data_source !== "SAP") return { action: "conflict", issues: [{ code: "LOCAL_RECORD_CONFLICT", message: "Nomor PO sudah dimiliki record lokal" }] };
-    // PO baru yang belum full release (FRGKE != 'G') tidak disimpan; PO yang sudah ada tetap di-update.
+    const items = mergeItems(existing?.items, incoming.items);
+    const document: PoDocument = { ...incoming, items, sourceDate: earliestDate(existing?.source_date, incoming.sourceDate), ...summarizePo(items) };
+    // PO baru yang belum full release (FRGKE bukan 'G'/'2') tidak disimpan; PO yang sudah ada tetap di-update.
     if (!existing && document.status !== "ISSUED") return { action: "skipped", issues: [] };
     const vendor = await client.query<{ id: string }>(
       "SELECT id FROM vendor_registrations WHERE vendor_code=$1",
@@ -195,6 +215,8 @@ export class Repository {
     const vendorId = vendor.rows[0]?.id ?? null;
     const issues = [...document.issues];
     if (!vendorId) issues.push({ code: "VENDOR_NOT_FOUND", message: `Vendor ${document.vendorCode} belum ditemukan` });
+    // Relasi ikut checksum agar vendor yang baru ditambahkan belakangan tetap tersambung di run berikutnya.
+    hash = hashJson({ document: { ...document, issues: undefined }, vendorId });
     if (existing?.source_checksum === hash) return { action: "unchanged", issues };
     let poId = existing?.id;
     if (!existing) {
@@ -249,7 +271,7 @@ export class Repository {
         )).rows
       : [];
     const purchaseOrders = new Map(poRows.map((row) => [row.po_number, row]));
-    // Relasi belum ketemu tidak membatalkan baris; run berikutnya merekonsiliasi setelah PO masuk.
+    // Relasi belum ketemu tidak membatalkan baris; checksum di bawah membuat run berikutnya menyambungkannya.
     for (const poNumber of poNumbers) {
       if (!purchaseOrders.has(poNumber)) issues.push({ code: "PO_NOT_FOUND", message: `PO ${poNumber} belum ditemukan` });
     }
@@ -261,6 +283,8 @@ export class Repository {
       unitId = unit.rows[0]?.id ?? null;
     }
 
+    // Relasi ikut checksum agar PO/vendor/unit yang baru masuk belakangan tetap tersambung di run berikutnya.
+    hash = hashJson({ source: hash, vendorId, unitId, poIds: poRows.map((row) => row.id).sort() });
     if (existing?.source_checksum === hash) return { action: "unchanged", issues };
     const action: RecordAction = existing ? "updated" : "inserted";
     if (!apply) return { action, issues };

@@ -150,6 +150,13 @@ describe("normalisasi PO", () => {
     expect(mixed?.value?.status).toBe("DRAFT");
   });
 
+  it("menganggap FRGKE 2 sebagai release, sendiri maupun campur dengan G", () => {
+    expect(normalizePoDocuments([{ ...poSample, FRGKE: "2" }])[0]?.value?.status).toBe("ISSUED");
+    const [mixed] = normalizePoDocuments([poSample, { ...poSample, KEY: "435000612700020", EBELP: 20, FRGKE: "2" }]);
+    expect(mixed?.value?.status).toBe("ISSUED");
+    expect(normalizePoDocuments([{ ...poSample, FRGKE: "B" }])[0]?.value?.status).toBe("DRAFT");
+  });
+
   it("mengabaikan item PO terhapus saat menentukan full release", () => {
     const [record] = normalizePoDocuments([
       poSample,
@@ -184,14 +191,20 @@ describe("normalisasi PO", () => {
     expect(record?.value?.items[0]?.lineTotal).toBe("10");
   });
 
-  it("menolak PEINH 0", () => {
-    const records = normalizePoDocuments([{ ...poSample, PEINH: "0" }]);
-    expect(records[0]?.issues.map((issue) => issue.code)).toContain("INVALID_PRICE_UNIT");
+  it.each(["0", "   ", undefined])("PEINH %s dihitung sebagai 1 dan dicatat non-fatal", (peinh) => {
+    const [record] = normalizePoDocuments([{ ...poSample, MENGE: "3", NETPR: "10", PEINH: peinh }]);
+    expect(record?.value?.items[0]).toMatchObject({ priceUnit: "1", lineTotal: "30" });
+    expect(record?.issues.map((issue) => issue.code)).toEqual(["PRICE_UNIT_DEFAULTED"]);
   });
 
-  it.each([undefined, "abc"])("menolak PEINH %s", (peinh) => {
-    const codes = normalizePoDocuments([{ ...poSample, PEINH: peinh }])[0]?.issues.map((issue) => issue.code);
-    expect(codes).toEqual(expect.arrayContaining(["INVALID_NUMBER", "INVALID_PRICE_UNIT"]));
+  it("PR dengan PEINH 0 juga dihitung sebagai 1", () => {
+    const [record] = normalizePrDocuments([{ ...prSample, MENGE: "2", PREIS: "5", PEINH: "0" }]);
+    expect(record?.value?.items[0]).toMatchObject({ priceUnit: "1", lineTotal: "10" });
+  });
+
+  it("tetap menolak PEINH bukan angka", () => {
+    const codes = normalizePoDocuments([{ ...poSample, PEINH: "abc" }])[0]?.issues.map((issue) => issue.code);
+    expect(codes).toContain("INVALID_NUMBER");
   });
 });
 
@@ -247,7 +260,7 @@ describe("normalizeReceiptDocuments", () => {
     ]);
     expect(record?.value?.items).toHaveLength(2);
     expect(record?.value?.totalQty).toBe("30320");
-    expect(record?.value?.totalValue).toBe("433533");
+    expect(record?.value?.totalValue).toBe("43353300");
     expect(record?.value?.poNumber).toBe("4310011653");
   });
 
@@ -267,10 +280,17 @@ describe("normalizeReceiptDocuments", () => {
     expect(normalizeReceiptDocuments([{ ...grSample, ERFMG: -5 }])[0]?.value?.isReversal).toBe(true);
   });
 
-  it("tidak mengubah nilai desimal DMBTR", () => {
+  it("mengalikan DMBTR IDR dengan 100 ke nilai sebenarnya SAP", () => {
     const [record] = normalizeReceiptDocuments([sesSample]);
+    expect(record?.value?.totalValue).toBe("86302497");
+    expect(record?.value?.items[0]?.amount).toBe("86302497");
+    expect(normalizeReceiptDocuments([{ ...grSample, DMBTR: 2925000 }])[0]?.value?.totalValue).toBe("292500000");
+    expect(normalizeReceiptDocuments([{ ...grSample, DMBTR: 975000, WAERS: "idr" }])[0]?.value?.totalValue).toBe("97500000");
+  });
+
+  it("tidak mengubah DMBTR mata uang berdesimal", () => {
+    const [record] = normalizeReceiptDocuments([{ ...sesSample, WAERS: "USD" }]);
     expect(record?.value?.totalValue).toBe("863024.97");
-    expect(record?.value?.items[0]?.amount).toBe("863024.97");
   });
 
   it("menolak angka berformat ribuan Indonesia pada DMBTR", () => {
