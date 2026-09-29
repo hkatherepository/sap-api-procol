@@ -50,16 +50,12 @@ export class SapClient {
   private requestOnce(resource: Resource, window: DateWindow): Promise<unknown[]> {
     const url = new URL(this.config.urls[resource]);
     let body: string | undefined;
-    // ponytail: filter tanggal aktif hanya untuk GR - endpoint GR/SES membalas HTTP 500
-    // kalau ditarik penuh tanpa selection BUDAT. Vendor/PR/PO tetap full pull;
-    // aktifkan filternya juga kalau payload SAP sudah terlalu besar untuk sekali tarik.
-    if (resource === "gr") {
-      if (this.config.filterTransport === "query_parameter") {
-        url.searchParams.set(this.config.lowParam, window.low);
-        url.searchParams.set(this.config.highParam, window.high);
-      } else {
-        body = JSON.stringify({ [this.config.lowParam]: window.low, [this.config.highParam]: window.high });
-      }
+    // Filter tanggal di sisi SAP: PR = ERDAT, PO = AEDAT, GR = BUDAT, Vendor = AEDAT.
+    if (this.config.filterTransport === "query_parameter") {
+      url.searchParams.set(this.config.lowParam, window.low);
+      url.searchParams.set(this.config.highParam, window.high);
+    } else {
+      body = JSON.stringify({ [this.config.lowParam]: window.low, [this.config.highParam]: window.high });
     }
 
     return new Promise((resolve, reject) => {

@@ -1,9 +1,13 @@
 export const RESOURCES = ["vendor", "pr", "po", "gr"] as const;
 export type Resource = (typeof RESOURCES)[number];
+// Resource yang ikut scheduler dan `--resource all`. Vendor dimatikan sementara karena data vendor
+// sekarang di-post dari sumber lain; masih bisa dijalankan manual lewat `--resource vendor`.
+export const SYNC_RESOURCES: Resource[] = [/* "vendor", */ "pr", "po", "gr"];
 export type SyncMode = "dry_run" | "apply";
 export type Trigger = "cli" | "scheduler" | "retry";
 export type RunStatus = "pending" | "running" | "completed" | "partial" | "failed" | "skipped_locked";
-export type RecordAction = "inserted" | "updated" | "unchanged" | "conflict" | "invalid" | "failed";
+// "skipped" hanya hidup di memori (tidak masuk audit), jadi CHECK constraint DB tidak perlu diubah.
+export type RecordAction = "inserted" | "updated" | "unchanged" | "conflict" | "invalid" | "failed" | "skipped";
 
 export interface DateWindow {
   low: string;
@@ -104,6 +108,7 @@ export interface PoItem {
   quantity: string;
   unit: string | null;
   netPrice: string;
+  priceUnit: string;
   releaseIndicator: string | null;
   currency: string | null;
   lineTotal: string | null;

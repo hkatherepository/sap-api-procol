@@ -2,11 +2,11 @@ import type { Logger } from "pino";
 import type { PoolClient } from "pg";
 import type { AppConfig } from "./config.js";
 import { inTransaction } from "./database.js";
-import { RESOURCES, emptyCounters, type DateWindow, type NormalizedRecord, type PoDocument, type PrDocument, type ReceiptDocument, type Resource, type ResourceCounters, type SyncMode, type Trigger, type VendorRecord } from "./domain.js";
+import { RESOURCES, SYNC_RESOURCES, emptyCounters, type DateWindow, type NormalizedRecord, type PoDocument, type PrDocument, type ReceiptDocument, type Resource, type ResourceCounters, type SyncMode, type Trigger, type VendorRecord } from "./domain.js";
 import { Repository, type ReconcileResult } from "./repository.js";
 import { SapClient } from "./sap/client.js";
 import { normalizePoDocuments, normalizePrDocuments, normalizeReceiptDocuments, normalizeVendors } from "./sap/normalize.js";
-import { hashJson, jakartaToday, splitMonthlyWindows } from "./utils.js";
+import { hashJson, jakartaToday, monthStart, splitMonthlyWindows } from "./utils.js";
 import type { Pool } from "pg";
 
 const FATAL_ISSUES = new Set([
@@ -16,7 +16,6 @@ const FATAL_ISSUES = new Set([
   "INVALID_EMAIL",
   "INVALID_ITEM_NUMBER",
   "INVALID_NUMBER",
-  "INVALID_PRICE_UNIT",
   "INVALID_PO_ITEM",
   "KEY_MISMATCH",
   "DUPLICATE_KEY_CONFLICT",
@@ -35,6 +34,8 @@ export interface RunRequest {
   triggerKey?: string;
   retryOf?: string;
   scheduledFor?: Date;
+  // Run terjadwal: jumlah bulan penuh sebelum bulan berjalan yang ikut ditarik (default 1 = bulan lalu + bulan ini).
+  lookbackMonths?: number;
 }
 
 interface Task {
@@ -142,11 +143,11 @@ export class SyncEngine {
   }
 
   private async buildTasks(request: RunRequest): Promise<Task[]> {
-    const selected = request.resources ?? [...RESOURCES];
+    const selected = request.resources ?? SYNC_RESOURCES;
     const tasks: Task[] = [];
     if (request.window) {
-      const windows = splitMonthlyWindows(request.window.low, request.window.high);
-      for (const window of windows) {
+      // Per bulan, urutan PR → PO → GR agar PO menemukan PR-nya dan GR menemukan PO-nya.
+      for (const window of splitMonthlyWindows(request.window.low, request.window.high)) {
         for (const resource of RESOURCES) {
           if (selected.includes(resource)) tasks.push({ resource, window, checkpointBefore: await this.repository.checkpoint(resource) });
         }
@@ -161,15 +162,12 @@ export class SyncEngine {
       return this.sortTasks(tasks);
     }
     const today = jakartaToday();
+    const start = monthStart(today, request.lookbackMonths ?? 1);
     for (const resource of selected) {
       const checkpointBefore = await this.repository.checkpoint(resource);
-      // ponytail: filter tanggal off di client untuk vendor/pr/po, jadi cukup 1 task (full pull).
-      // GR difilter BUDAT, jadi harus mulai dari checkpoint supaya run yang terlewat ikut tersusul.
-      if (resource === "gr") {
-        for (const window of splitMonthlyWindows(checkpointBefore ?? today, today)) tasks.push({ resource, window, checkpointBefore });
-      } else {
-        tasks.push({ resource, window: { low: today, high: today }, checkpointBefore });
-      }
+      // Mulai tanggal 1 N bulan lalu; mundur ke checkpoint bila ada run yang terlewat lebih lama dari itu.
+      const low = checkpointBefore && checkpointBefore < start ? checkpointBefore : start;
+      for (const window of splitMonthlyWindows(low, today)) tasks.push({ resource, window, checkpointBefore });
     }
     return this.sortTasks(tasks);
   }
@@ -209,6 +207,11 @@ export class SyncEngine {
         counters.valid += 1;
         try {
           const result = await inTransaction(this.pool, (client) => this.reconcile(resource, client, record, apply));
+          // Dokumen baru belum release: tidak dihitung dan tidak dicatat di audit agar DB tidak ikut tumbuh.
+          if (result.action === "skipped") {
+            counters.valid -= 1;
+            continue;
+          }
           counters[result.action] += 1;
           await this.repository.recordResult(runResourceId, record.key, result.action, record.hash, [...record.issues, ...result.issues]);
         } catch (error) {

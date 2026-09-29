@@ -152,8 +152,13 @@ tanpa error, tanpa peringatan. Aturan yang sama berlaku untuk `BNFPO` →
 | GR/SES | `DMBTR` | `863024.97` (JSON number) | pemisah **desimal** |
 
 Resource GR/SES mengirim angka sebagai JSON number biasa. **Jangan menerapkan
-parser format Indonesia di sini.** Kalau `863024.97` diproses seperti `NETPR`,
-nilainya menjadi `86.302.497` — seratus kali lipat.
+parser format Indonesia di sini** — titiknya pemisah desimal.
+
+Namun `DMBTR` dikirim dalam **format internal SAP** (dikonfirmasi tim ABAP): SAP
+menyimpan nilai uang dengan 2 desimal, sehingga mata uang tanpa desimal seperti IDR
+tampil terbagi 100 (SAP `292.500.000` → API `2925000`). Middleware mengalikan
+`DMBTR` dengan 100 untuk IDR/JPY/KRW/VND, sehingga `863024.97` tersimpan sebagai
+`86302497`. Mata uang berdesimal (USD, EUR) tidak diubah.
 
 Artinya konfigurasi format angka harus **per resource**, bukan global. Kalau saat
 ini `SAP_NUMBER_FORMAT` berlaku untuk semua resource, ubah menjadi per-resource.

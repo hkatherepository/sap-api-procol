@@ -12,7 +12,7 @@ Backend terpisah untuk mengambil Vendor, Purchase Requisition (PR), dan Purchase
 - Dry-run, apply dengan konfirmasi eksplisit, status, dan retry.
 - Audit per run/resource/record tanpa menyimpan payload mentah.
 - Checksum, checkpoint overlap satu hari, transaksi per dokumen, dan PostgreSQL advisory lock.
-- Scheduler pukul 08.00 dan 16.00 `Asia/Jakarta`, catch-up tunggal saat restart, dan deduplikasi slot jadwal.
+- Scheduler `Asia/Jakarta`: pukul 11.00 dan 15.00 (PR, PO, GR, 2 bulan) serta 23.00 (PR dan PO, 12 bulan), diatur lewat `SYNC_SCHEDULES` dan `SYNC_DEEP_SCHEDULE`; catch-up tunggal saat restart dan deduplikasi slot jadwal.
 - Health check `GET /health/live` dan `GET /health/ready`; tidak ada endpoint manual refresh pada v1.
 - Container non-root, read-only filesystem, dropped capabilities, dan logger dengan redaksi data sensitif.
 

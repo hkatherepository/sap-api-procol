@@ -32,16 +32,22 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...base, SYNC_SCHEDULER_ENABLED: "true" }).sync.schedulerEnabled).toBe(true);
   });
 
-  it("menerima dua cron terpisah", () => {
-    expect(loadConfig({ ...base, SYNC_SCHEDULES: "0 7 * * *,0 12 * * *,0 19 * * *" }).sync.schedules).toEqual(["0 7 * * *", "0 12 * * *", "0 19 * * *"]);
+  it("memakai jadwal default 11.00, 15.00, dan sync malam 23.00", () => {
+    const { sync } = loadConfig(base);
+    expect(sync).toMatchObject({ schedules: ["0 11 * * *", "0 15 * * *"], slotHours: ["11", "15"], deepSchedule: "0 23 * * *" });
   });
 
-  it("menerima cron gabungan", () => {
-    expect(loadConfig({ ...base, SYNC_SCHEDULES: "0 7,12,19 * * *" }).sync.schedules).toEqual(["0 7,12,19 * * *"]);
+  it("menurunkan jam slot terurut dari SYNC_SCHEDULES", () => {
+    const { sync } = loadConfig({ ...base, SYNC_SCHEDULES: "0 15 * * *, 0 9 * * *", SYNC_DEEP_SCHEDULE: "30 22 * * *" });
+    expect(sync).toMatchObject({ slotHours: ["09", "15"], deepSchedule: "30 22 * * *" });
   });
 
-  it("menolak jadwal di luar 07.00, 12.00, dan 19.00", () => {
-    expect(() => loadConfig({ ...base, SYNC_SCHEDULES: "0 * * * *" })).toThrow(/hanya boleh/);
+  it.each(["0 * * * *", "30 11 * * *", "0 25 * * *", "0 11 * * *,0 11 * * *", ""])("menolak SYNC_SCHEDULES %j", (value) => {
+    expect(() => loadConfig({ ...base, SYNC_SCHEDULES: value })).toThrow(/SYNC_SCHEDULES/);
+  });
+
+  it("menolak SYNC_DEEP_SCHEDULE yang bukan cron", () => {
+    expect(() => loadConfig({ ...base, SYNC_DEEP_SCHEDULE: "setiap malam" })).toThrow(/SYNC_DEEP_SCHEDULE/);
   });
 
   it("menolak GET dengan JSON body", () => {

@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 import type { AppConfig } from "./config.js";
 import { SyncEngine } from "./sync-engine.js";
 import { Repository } from "./repository.js";
+import { jakartaToday } from "./utils.js";
 
 function jakartaParts(now: Date): { date: string; hour: number } {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -23,24 +24,26 @@ function previousDate(compact: string): string {
   return date.toISOString().slice(0, 10).replaceAll("-", "");
 }
 
-export const SLOT_HOURS = ["07", "12", "19"] as const;
+// Sync malam (SYNC_DEEP_SCHEDULE) menarik PR & PO 12 bulan (bulan ini + 11 bulan sebelumnya)
+// untuk menangkap release dan tambahan item yang terlambat.
+export const DEEP_SYNC_LOOKBACK_MONTHS = 11;
 
-export function latestScheduleSlot(now = new Date()): string {
+export function latestScheduleSlot(slotHours: string[], now = new Date()): string {
   const local = jakartaParts(now);
-  const passed = SLOT_HOURS.filter((hour) => local.hour >= Number(hour));
+  const passed = slotHours.filter((hour) => local.hour >= Number(hour));
   const last = passed.at(-1);
-  return last ? `${local.date}-${last}` : `${previousDate(local.date)}-${SLOT_HOURS.at(-1)}`;
+  return last ? `${local.date}-${last}` : `${previousDate(local.date)}-${slotHours.at(-1)}`;
 }
 
-export function previousScheduleSlot(slot: string): string {
+export function previousScheduleSlot(slot: string, slotHours: string[]): string {
   const match = /^(\d{8})-(\d{2})$/.exec(slot);
-  const index = match ? (SLOT_HOURS as readonly string[]).indexOf(match[2]!) : -1;
+  const index = match ? slotHours.indexOf(match[2]!) : -1;
   if (index < 0) throw new Error("Schedule slot tidak valid");
-  return index === 0 ? `${previousDate(match![1]!)}-${SLOT_HOURS.at(-1)}` : `${match![1]}-${SLOT_HOURS[index - 1]}`;
+  return index === 0 ? `${previousDate(match![1]!)}-${slotHours.at(-1)}` : `${match![1]}-${slotHours[index - 1]}`;
 }
 
-async function alertMissingPreviousSlot(repository: Repository, logger: Logger, currentSlot: string): Promise<void> {
-  const previousSlot = previousScheduleSlot(currentSlot);
+async function alertMissingPreviousSlot(repository: Repository, logger: Logger, currentSlot: string, slotHours: string[]): Promise<void> {
+  const previousSlot = previousScheduleSlot(currentSlot, slotHours);
   if (!await repository.wasTriggerSuccessful(`scheduler:${previousSlot}`)) {
     logger.error({ event: "sap_sync_missing_success_alert", previousSlot }, "Tidak ada run sukses pada slot scheduler sebelumnya");
   }
@@ -51,13 +54,27 @@ export function startScheduler(config: AppConfig, engine: SyncEngine, repository
     cron.schedule(
       expression,
       async () => {
-        const slot = latestScheduleSlot();
+        const slot = latestScheduleSlot(config.sync.slotHours);
         const triggerKey = `scheduler:${slot}`;
         try {
-          await alertMissingPreviousSlot(repository, logger, slot);
+          await alertMissingPreviousSlot(repository, logger, slot, config.sync.slotHours);
           await engine.run({ trigger: "scheduler", mode: "apply", triggerKey, scheduledFor: new Date() });
         } catch (error) {
           logger.error({ err: error, triggerKey }, "Scheduled sync gagal");
+        }
+      },
+      { timezone: config.sync.timezone, noOverlap: true },
+    ),
+  );
+  tasks.push(
+    cron.schedule(
+      config.sync.deepSchedule,
+      async () => {
+        const triggerKey = `scheduler-deep:${jakartaToday()}`;
+        try {
+          await engine.run({ trigger: "scheduler", mode: "apply", triggerKey, scheduledFor: new Date(), resources: ["pr", "po"], lookbackMonths: DEEP_SYNC_LOOKBACK_MONTHS });
+        } catch (error) {
+          logger.error({ err: error, triggerKey }, "Deep sync malam gagal");
         }
       },
       { timezone: config.sync.timezone, noOverlap: true },
@@ -79,9 +96,9 @@ export function startScheduler(config: AppConfig, engine: SyncEngine, repository
   );
 
   setImmediate(() => {
-    const slot = latestScheduleSlot();
+    const slot = latestScheduleSlot(config.sync.slotHours);
     const triggerKey = `scheduler:${slot}`;
-    alertMissingPreviousSlot(repository, logger, slot)
+    alertMissingPreviousSlot(repository, logger, slot, config.sync.slotHours)
       .then(() => engine.run({ trigger: "scheduler", mode: "apply", triggerKey, scheduledFor: new Date() }))
       .catch((error) => {
       logger.error({ err: error, triggerKey }, "Catch-up sync gagal");

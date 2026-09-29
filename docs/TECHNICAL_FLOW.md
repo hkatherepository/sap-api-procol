@@ -31,13 +31,13 @@ Untuk range eksplisit, `20260601–20260805` menjadi:
 2. `20260701–20260731`
 3. `20260801–20260805`
 
-Pada setiap window, urutannya Vendor → PR → PO. Untuk run rutin, `low` sama dengan `checkpoint_high` terakhir sehingga satu tanggal diproses ulang sebagai overlap; `high` adalah tanggal run dimulai di `Asia/Jakarta`.
+Pada setiap window, urutannya PR → PO → GR (Vendor dimatikan sementara, hanya lewat `--resource vendor`). `low`/`high` dikirim ke SAP untuk semua resource: PR = `ERDAT`, PO = `AEDAT`, GR = `BUDAT`. Scheduler punya dua jadwal (`Asia/Jakarta`): slot 11.00 dan 15.00 menarik PR, PO, GR dari tanggal 1 bulan lalu s.d. hari ini (2 bulan); sync malam 23.00 menarik PR dan PO dari tanggal 1 sebelas bulan lalu s.d. hari ini (12 bulan) untuk menangkap release dan tambahan item yang terlambat. Bila `checkpoint_high` lebih tua dari awal window, `low` mundur ke checkpoint agar run yang terlewat tersusul. Checkpoint hanya maju, sehingga backfill rentang lama lewat CLI tidak memundurkannya.
 
 ```text
 Window N
-  ├─ Vendor
   ├─ PR
-  └─ PO
+  ├─ PO
+  └─ GR
        |
        v
 Window N+1
@@ -112,7 +112,7 @@ lookup pr_number
   └─ checksum berubah        → update field SAP + items
 ```
 
-Total aktif = `quantity × price ÷ priceUnit`. Item `LOEKZ` tetap ada di JSON tetapi tidak masuk total maupun evaluasi release. `FRGKZ` disimpan sebagai `releaseIndicator`. Status menjadi `CONVERTED` bila seluruh item aktif memiliki PO; jika belum, menjadi `APPROVED` bila seluruh item aktif memiliki `FRGKZ=2`, atau `SUBMITTED` selain itu. Sinkronisasi dapat mengubah status di antara ketiga status SAP tersebut, sedangkan `REJECTED` dipertahankan.
+Total aktif = `quantity × price ÷ priceUnit`. Item `LOEKZ` tetap ada di JSON tetapi tidak masuk total maupun evaluasi release. `FRGKZ` disimpan sebagai `releaseIndicator`. Status menjadi `CONVERTED` bila seluruh item aktif memiliki PO; jika belum, menjadi `APPROVED` bila seluruh item aktif memiliki `FRGKZ=2`, atau `SUBMITTED` selain itu. Sinkronisasi dapat mengubah status di antara ketiga status SAP tersebut, sedangkan `REJECTED` dipertahankan. PR **baru** yang belum full release (`SUBMITTED`) tidak di-insert dan tidak dicatat di audit; PR yang sudah ada tetap di-update. `PEINH` 0 atau kosong dihitung sebagai 1 dengan catatan non-fatal `PRICE_UNIT_DEFAULTED`.
 
 ### Purchase Order
 
@@ -127,7 +127,11 @@ lookup po_number + LIFNR pada vendor_registrations.vendor_code
                          reconcile PR item links
 ```
 
-Total aktif = `quantity × netPrice`; `ppn` dan `grand_total` tidak direkayasa. `FRGKE` disimpan sebagai `releaseIndicator`: seluruh item aktif harus bernilai `G` agar PO menjadi `ISSUED`, jika tidak statusnya `DRAFT`. SAP dapat mengubah status di antara `DRAFT` dan `ISSUED`, tetapi lifecycle lokal mulai `ACKNOWLEDGED` hingga `CANCELLED` dipertahankan. `issued_at` mengikuti `AEDAT` untuk `ISSUED` dan dikosongkan saat kembali `DRAFT`. Setelah PO ditulis, item PR dengan `poNumber + poItemNumber` yang sama dimasukkan ke `sap_document_links`. `purchase_orders.pr_id` hanya diisi jika semua link PO menunjuk tepat satu header PR.
+Total aktif = `quantity × (netPrice ÷ priceUnit)`; `PEINH` 0 atau kosong dihitung sebagai 1 (`PRICE_UNIT_DEFAULTED`, non-fatal), teks non-angka tetap fatal; `ppn` dan `grand_total` tidak direkayasa. `FRGKE` disimpan sebagai `releaseIndicator`: seluruh item aktif harus bernilai `G` atau `2` agar PO menjadi `ISSUED`, jika tidak statusnya `DRAFT`. SAP dapat mengubah status di antara `DRAFT` dan `ISSUED`, tetapi lifecycle lokal mulai `ACKNOWLEDGED` hingga `CANCELLED` dipertahankan. `issued_at` mengikuti `AEDAT` untuk `ISSUED` dan dikosongkan saat kembali `DRAFT`. Setelah PO ditulis, item PR dengan `poNumber + poItemNumber` yang sama dimasukkan ke `sap_document_links`. `purchase_orders.pr_id` hanya diisi jika semua link PO menunjuk tepat satu header PR. PO **baru** yang belum full release (`DRAFT`) tidak di-insert dan tidak dicatat di audit; PO yang sudah ada tetap di-update.
+
+### Penggabungan item PR/PO
+
+Filter tanggal SAP (`ERDAT`/`AEDAT`) bekerja per item, sehingga satu window bisa membawa sebagian item sebuah dokumen. Saat reconcile, item yang datang digabung dengan item tersimpan berdasarkan nomor item: item bernomor sama ditimpa, item baru ditambahkan, item yang tidak ikut terkirim tetap disimpan. Total, currency, dan status dihitung ulang dari seluruh item gabungan; `source_date` memakai tanggal paling awal. Item yang dihapus di SAP tetap terkirim dengan `LOEKZ` dan dikeluarkan dari total.
 
 ## 6. Batas transaksi, audit, dan checkpoint
 

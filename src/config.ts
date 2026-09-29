@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import cron from "node-cron";
 import { z } from "zod";
 
 const booleanString = z.enum(["true", "false"]).transform((value) => value === "true");
@@ -22,7 +23,8 @@ const schema = z
     SAP_API_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
     SAP_MAX_RESPONSE_MB: z.coerce.number().positive().max(500).default(50),
     SAP_NUMBER_FORMAT: z.literal("id-ID").default("id-ID"),
-    SYNC_SCHEDULES: z.string().default("0 7 * * *,0 12 * * *,0 19 * * *"),
+    SYNC_SCHEDULES: z.string().default("0 11 * * *,0 15 * * *"),
+    SYNC_DEEP_SCHEDULE: z.string().default("0 23 * * *"),
     SYNC_TIMEZONE: z.literal("Asia/Jakarta").default("Asia/Jakarta"),
     SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(2_000).default(200),
     DRY_RUN_ONLY: booleanString.default(true),
@@ -46,15 +48,14 @@ export type AppConfig = ReturnType<typeof loadConfig>;
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
   const env = schema.parse(source);
-  const rawSchedules = env.SYNC_SCHEDULES.trim().replace(/\s+/g, " ");
-  const schedules = rawSchedules === "0 7,12,19 * * *"
-    ? [rawSchedules]
-    : rawSchedules.split(",").map((value) => value.trim()).filter(Boolean);
-  const expected = ["0 7 * * *", "0 12 * * *", "0 19 * * *"];
-  const validSchedules =
-    (schedules.length === 1 && schedules[0] === "0 7,12,19 * * *") ||
-    (schedules.length === 3 && expected.every((value) => schedules.includes(value)));
-  if (!validSchedules) throw new Error("SYNC_SCHEDULES hanya boleh 0 7 * * *,0 12 * * *,0 19 * * * atau 0 7,12,19 * * *");
+  // Slot 2 bulan wajib "0 <jam> * * *": jam slot dipakai sebagai trigger key (mis. 20260929-11).
+  const schedules = env.SYNC_SCHEDULES.split(",").map((value) => value.trim().replace(/\s+/g, " ")).filter(Boolean);
+  const hours = schedules.map((expression) => Number(/^0 (\d{1,2}) \* \* \*$/.exec(expression)?.[1] ?? NaN));
+  if (schedules.length === 0 || hours.some((hour) => !Number.isInteger(hour) || hour > 23) || new Set(hours).size !== hours.length) {
+    throw new Error("SYNC_SCHEDULES harus daftar '0 <jam> * * *' dipisah koma, contoh: 0 11 * * *,0 15 * * *");
+  }
+  if (!cron.validate(env.SYNC_DEEP_SCHEDULE)) throw new Error("SYNC_DEEP_SCHEDULE bukan ekspresi cron valid");
+  const slotHours = [...hours].sort((a, b) => a - b).map((hour) => String(hour).padStart(2, "0"));
   return {
     env: env.NODE_ENV,
     databaseUrl: env.DATABASE_URL,
@@ -73,6 +74,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
     },
     sync: {
       schedules,
+      slotHours,
+      deepSchedule: env.SYNC_DEEP_SCHEDULE,
       timezone: env.SYNC_TIMEZONE,
       batchSize: env.SYNC_BATCH_SIZE,
       dryRunOnly: env.DRY_RUN_ONLY,

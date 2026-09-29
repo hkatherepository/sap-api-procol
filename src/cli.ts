@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { Command, Option } from "commander";
 import { bootstrap } from "./bootstrap.js";
-import { RESOURCES, type Resource } from "./domain.js";
+import { RESOURCES, SYNC_RESOURCES, type Resource } from "./domain.js";
 import { jakartaToday, validateWindow } from "./utils.js";
 
 function selectedResources(value: string): Resource[] {
-  if (value === "all") return [...RESOURCES];
+  if (value === "all") return [...SYNC_RESOURCES];
   if (RESOURCES.includes(value as Resource)) return [value as Resource];
   throw new Error(`resource harus all atau salah satu dari ${RESOURCES.join(", ")}`);
 }
