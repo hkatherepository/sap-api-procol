@@ -206,8 +206,10 @@ export class Repository {
     if (existing && existing.data_source !== "SAP") return { action: "conflict", issues: [{ code: "LOCAL_RECORD_CONFLICT", message: "Nomor PO sudah dimiliki record lokal" }] };
     const items = mergeItems(existing?.items, incoming.items);
     const document: PoDocument = { ...incoming, items, sourceDate: earliestDate(existing?.source_date, incoming.sourceDate), ...summarizePo(items) };
+    // Sementara dinonaktifkan: bug di SAP masih membolehkan PO belum release punya GR, sehingga GR di Procol
+    // kehilangan PO induknya. Aktifkan lagi setelah bug SAP diperbaiki. PO belum release tersimpan sebagai DRAFT.
     // PO baru yang belum full release (FRGKE bukan 'G'/'2') tidak disimpan; PO yang sudah ada tetap di-update.
-    if (!existing && document.status !== "ISSUED") return { action: "skipped", issues: [] };
+    // if (!existing && document.status !== "ISSUED") return { action: "skipped", issues: [] };
     const vendor = await client.query<{ id: string }>(
       "SELECT id FROM vendor_registrations WHERE vendor_code=$1",
       [document.vendorCode],

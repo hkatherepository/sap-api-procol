@@ -204,10 +204,12 @@ describeDatabase("Repository PostgreSQL", () => {
       await repository.reconcilePr(client, { ...pr, items: [prItem("2")] }, "5".repeat(64), true);
       expect((await client.query("SELECT status FROM purchase_requests WHERE pr_number=$1", [prNumber])).rows[0]?.status).toBe("rejected");
 
-      expect((await repository.reconcilePo(client, po, "6".repeat(64), true)).action).toBe("skipped");
-      expect((await client.query("SELECT 1 FROM purchase_orders WHERE po_number=$1", [poNumber])).rowCount).toBe(0);
-      await repository.reconcilePo(client, { ...po, items: [poItem("G")] }, "7".repeat(64), true);
+      // Filter PO belum release sedang dinonaktifkan, jadi PO DRAFT baru tetap tersimpan.
+      expect((await repository.reconcilePo(client, po, "6".repeat(64), true)).action).toBe("inserted");
       let storedPo = (await client.query<{ status: string; issued_at: Date | null }>("SELECT status,issued_at FROM purchase_orders WHERE po_number=$1", [poNumber])).rows[0]!;
+      expect(storedPo).toMatchObject({ status: "draft", issued_at: null });
+      await repository.reconcilePo(client, { ...po, items: [poItem("G")] }, "7".repeat(64), true);
+      storedPo = (await client.query<{ status: string; issued_at: Date | null }>("SELECT status,issued_at FROM purchase_orders WHERE po_number=$1", [poNumber])).rows[0]!;
       expect(storedPo.status).toBe("issued");
       expect(storedPo.issued_at).not.toBeNull();
       await repository.reconcilePo(client, po, "8".repeat(64), true);
