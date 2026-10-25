@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizePoDocuments, normalizePrDocuments, normalizeReceiptDocuments, normalizeVendors } from "../src/sap/normalize.js";
+import { isPoAccepted, normalizePoDocuments, normalizePrDocuments, normalizeReceiptDocuments, normalizeVendors } from "../src/sap/normalize.js";
 
 const prSample = {
   KEY: "131001005700010",
@@ -200,6 +200,31 @@ describe("normalisasi PO", () => {
   it("PR dengan PEINH 0 juga dihitung sebagai 1", () => {
     const [record] = normalizePrDocuments([{ ...prSample, MENGE: "2", PREIS: "5", PEINH: "0" }]);
     expect(record?.value?.items[0]).toMatchObject({ priceUnit: "1", lineTotal: "10" });
+  });
+
+  it.each(["G", "2", "1", "B"])("mengambil PO dengan FRGKE %s", (frgke) => {
+    expect(isPoAccepted(normalizePoDocuments([{ ...poSample, FRGKE: frgke }])[0]!.value!)).toBe(true);
+  });
+
+  it.each(["L", "", undefined, "X"])("tidak mengambil PO dengan FRGKE %s", (frgke) => {
+    expect(isPoAccepted(normalizePoDocuments([{ ...poSample, FRGKE: frgke }])[0]!.value!)).toBe(false);
+  });
+
+  it("mengabaikan item terhapus saat memeriksa FRGKE, dan menolak PO yang seluruh itemnya terhapus", () => {
+    const [record] = normalizePoDocuments([poSample, { ...poSample, KEY: "435000612700020", EBELP: 20, FRGKE: "L", LOEKZ: "X" }]);
+    expect(isPoAccepted(record!.value!)).toBe(true);
+    expect(isPoAccepted(normalizePoDocuments([{ ...poSample, LOEKZ: "X" }])[0]!.value!)).toBe(false);
+  });
+
+  it("mengambil semua PO plant 3219 sebelum Oktober 2026, lalu mengikuti aturan FRGKE", () => {
+    const subang = { ...poSample, WERKS: "3219" };
+    for (const frgke of ["L", "", undefined]) {
+      expect(isPoAccepted(normalizePoDocuments([{ ...subang, FRGKE: frgke, AEDAT: "2025-01-01" }])[0]!.value!)).toBe(true);
+      expect(isPoAccepted(normalizePoDocuments([{ ...subang, FRGKE: frgke, AEDAT: "2026-09-30" }])[0]!.value!)).toBe(true);
+      expect(isPoAccepted(normalizePoDocuments([{ ...subang, FRGKE: frgke, AEDAT: "2026-10-01" }])[0]!.value!)).toBe(false);
+    }
+    expect(isPoAccepted(normalizePoDocuments([{ ...subang, FRGKE: "B", AEDAT: "2026-10-01" }])[0]!.value!)).toBe(true);
+    expect(isPoAccepted(normalizePoDocuments([{ ...poSample, FRGKE: "L", AEDAT: "2025-01-01" }])[0]!.value!)).toBe(false);
   });
 
   it("tetap menolak PEINH bukan angka", () => {

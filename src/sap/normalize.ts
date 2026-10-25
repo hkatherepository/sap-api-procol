@@ -181,6 +181,18 @@ export function summarizePo(items: PoItem[]): Pick<PoDocument, "currency" | "tot
   return { currency, total, status: released ? "ISSUED" : "DRAFT" };
 }
 
+// FRGKE yang boleh diambil. 'L' dan kosong berarti PO sudah dihapus/cancel di SAP, jadi tidak diambil.
+const PO_ACCEPTED_RELEASE = new Set(["G", "2", "1", "B"]);
+// Plant AMP Subang: PO dengan AEDAT sebelum Oktober 2026 tetap diambil apa pun FRGKE-nya.
+const PO_EXEMPT_PLANT = "3219";
+const PO_EXEMPT_BEFORE = "2026-10-01";
+
+export function isPoAccepted(document: Pick<PoDocument, "sourceDate" | "items">): boolean {
+  if (document.sourceDate < PO_EXEMPT_BEFORE && document.items.some((item) => item.plant === PO_EXEMPT_PLANT)) return true;
+  const active = document.items.filter((item) => !item.isDeleted);
+  return active.length > 0 && active.every((item) => item.releaseIndicator !== null && PO_ACCEPTED_RELEASE.has(item.releaseIndicator));
+}
+
 export function normalizePrDocuments(rows: unknown[]): NormalizedRecord<PrDocument>[] {
   const items = rows.map((row, index) => {
     const raw = asObject(row);
